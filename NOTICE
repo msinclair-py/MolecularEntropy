@@ -1,0 +1,17 @@
+This software uses the 2010 Backbone‑Dependent Rotamer Library (BBDEP2010).
+
+Contains information from the 2010 Backbone‑Dependent Rotamer Library
+(https://dunbrack.fccc.edu/bbdep2010),
+which is made available under the Open Data Commons Attribution License (ODC‑By).
+Full license text: https://dunbrack.fccc.edu/bbdep2010/license/bbdep2010_license.txt
+
+Please cite:
+Maxim V. Shapovalov and Roland L. Dunbrack, Jr. A smoothed backbone‑dependent rotamer library
+for proteins derived from adaptive kernel density estimates and regressions.
+Structure, 19:844–858 (2011). https://doi.org/10.1016/j.str.2011.03.019
+
+Source: Fox Chase Cancer Center, Dunbrack Lab (BBDEP2010)
+Data use: worldwide, royalty‑free per ODC‑By, with attribution and notice.
+
+If redistributing the database or any derivative database, you must include this NOTICE and the
+ODC‑By license text, and you may not impose additional restrictions (see Section 4.4 of ODC‑By).
