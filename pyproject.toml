@@ -1,0 +1,91 @@
+[build-system]
+requires = ['maturin>=1.4,<2.0']
+build-backend = 'maturin'
+
+[project]
+name = 'molecular_entropy'
+version = '0.1.0'
+authors = [
+  { name='Matt Sinclair', email='msinclair@anl.gov' },
+]
+description = 'Entropic contributions to protein binding free energy calculations'
+readme = 'README.md'
+requires-python = '>= 3.10'
+classifiers = [
+    'Development Status :: 4 - Beta',
+    'Intended Audience :: Science/Research',
+    'License :: OSI Approved :: MIT License',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Rust',
+    'Topic :: Scientific/Engineering :: Bio-Informatics',
+    'Topic :: Scientific/Engineering :: Chemistry',
+    'Typing :: Typed',
+]
+license = 'MIT'
+license-files = ['LICENSE/*']
+dependencies = [
+    'mdtraj>=1.9.7',
+    'polars>=0.20',
+    'numpy>=1.20.0',
+    'scipy>=1.7.0',
+    'rust-simulation-tools>=0.2.0',
+]
+
+[project.optional-dependencies]
+dev = [
+    'pytest>=7.0',
+    'pytest-cov>=4.0',
+    'maturin>=1.4',
+    'mypy>=1.0',
+    'ruff>=0.1',
+]
+
+[project.scripts]
+molecular-entropy = 'molecular_entropy.driver:main'
+
+[project.urls]
+Homepage = 'https://github.com/msinclair-py/MolecularEntropy'
+Documentation = 'https://github.com/msinclair-py/MolecularEntropy#readme'
+Repository = 'https://github.com/msinclair-py/MolecularEntropy'
+Issues = 'https://github.com/msinclair-py/MolecularEntropy/issues'
+
+[tool.maturin]
+features = ['pyo3/extension-module']
+python-source = 'src'
+module-name = 'molecular_entropy._core'
+manifest-path = 'Cargo.toml'
+# Wheel compatibility
+compatibility = 'manylinux2014'
+
+[tool.pytest.ini_options]
+addopts = '-q --maxfail=1'
+filterwarnings = [
+    'ignore::DeprecationWarning:importlib._bootstrap',
+]
+testpaths = ['tests']
+markers = [
+    'slow: potentially long-running test',
+    'requires_openmm: needs OpenMM runtime',
+    'requires_amber: needs AmberTools/tleap',
+    'requires_rdkit: needs RDKit installation',
+    'integration: end-to-end integration test',
+    'unit: isolated unit test',
+]
+
+[tool.mypy]
+python_version = '3.10'
+warn_return_any = true
+warn_unused_ignores = true
+strict = false
+plugins = ['numpy.typing.mypy_plugin']
+
+[tool.ruff]
+line-length = 100
+target-version = 'py310'
+select = ['E', 'F', 'I', 'N', 'W', 'UP', 'B', 'C4', 'SIM']
+ignore = ['E501']  # Line length handled separately

@@ -1,0 +1,27 @@
+[package]
+name = "molecular_entropy_core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "High-performance Rust extensions for molecular entropy calculations"
+
+[lib]
+name = "molecular_entropy_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+ndarray = "0.16"
+rayon = "1.10"
+kiddo = "4.2"
+
+# Sparse matrix and linear algebra for ANM
+sprs = "0.11"
+nalgebra = { version = "0.33", features = ["rayon"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true  # Reduce binary size by ~30-50%

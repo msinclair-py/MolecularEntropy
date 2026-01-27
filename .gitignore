@@ -1,0 +1,45 @@
+# Rotamer library build artifacts
+rotamer_library/*.py
+rotamer_library/simple/
+rotamer_library/extended/
+rotamer_library/zips/
+rotamer_library/*.index.pkl
+
+# Build artifacts
+new_version/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+target/
+*.so
+*.whl
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test data
+data/
+
+# Claude/AI
+.claude/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Rust
+Cargo.lock
+
+# Type stubs (generated)
+*.pyi.bak
