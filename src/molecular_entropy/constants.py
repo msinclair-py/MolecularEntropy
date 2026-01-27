@@ -46,7 +46,7 @@ DEFAULT_ANM_GAMMA: float = 1.0  # Spring constant
 # For -T*dS_solv = alpha_np * dSASA_nonpolar + beta_pol * dSASA_polar
 # Negative alpha_np means burying nonpolar surface is entropically favorable
 DEFAULT_ALPHA_NP: float = -0.007  # kcal/mol per A^2 (nonpolar burial is favorable)
-DEFAULT_BETA_POL: float = 0.003   # kcal/mol per A^2 (polar burial is unfavorable)
+DEFAULT_BETA_POL: float = 0.003  # kcal/mol per A^2 (polar burial is unfavorable)
 
 # Translational/rotational entropy penalty for binding
 # This is the -T*dS_TR term at 298K, typically 6-12 kcal/mol
@@ -54,36 +54,58 @@ DEFAULT_TR_PENALTY: float = 8.0  # kcal/mol
 
 # Residues with side-chain chi angles
 CHI_RESIDUES: set[str] = {
-    'ARG', 'LYS', 'GLU', 'GLN', 'MET', 'ILE', 'LEU', 'VAL',
-    'THR', 'SER', 'TYR', 'PHE', 'TRP', 'ASN', 'ASP', 'HIS',
-    'CYS', 'PRO'
+    "ARG",
+    "LYS",
+    "GLU",
+    "GLN",
+    "MET",
+    "ILE",
+    "LEU",
+    "VAL",
+    "THR",
+    "SER",
+    "TYR",
+    "PHE",
+    "TRP",
+    "ASN",
+    "ASP",
+    "HIS",
+    "CYS",
+    "PRO",
 }
 
 # Chi angle definitions per residue type
 # Each chi is defined by 4 atom names
 CHI_DEFINITIONS: dict[str, list[tuple[str, str, str, str]]] = {
-    'ARG': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD'),
-            ('CB', 'CG', 'CD', 'NE'), ('CG', 'CD', 'NE', 'CZ')],
-    'LYS': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD'),
-            ('CB', 'CG', 'CD', 'CE'), ('CG', 'CD', 'CE', 'NZ')],
-    'GLU': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD')],
-    'GLN': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD')],
-    'MET': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'SD'),
-            ('CB', 'CG', 'SD', 'CE')],
-    'ILE': [('N', 'CA', 'CB', 'CG1'), ('CA', 'CB', 'CG1', 'CD1')],
-    'LEU': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD1')],
-    'VAL': [('N', 'CA', 'CB', 'CG1')],
-    'THR': [('N', 'CA', 'CB', 'OG1')],
-    'SER': [('N', 'CA', 'CB', 'OG')],
-    'TYR': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD1')],
-    'PHE': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD1')],
-    'TRP': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD1')],
-    'ASN': [('N', 'CA', 'CB', 'CG')],
-    'ASP': [('N', 'CA', 'CB', 'CG')],
-    'HIS': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'ND1')],
-    'CYS': [('N', 'CA', 'CB', 'SG')],
-    'PRO': [('N', 'CA', 'CB', 'CG'), ('CA', 'CB', 'CG', 'CD')],
+    "ARG": [
+        ("N", "CA", "CB", "CG"),
+        ("CA", "CB", "CG", "CD"),
+        ("CB", "CG", "CD", "NE"),
+        ("CG", "CD", "NE", "CZ"),
+    ],
+    "LYS": [
+        ("N", "CA", "CB", "CG"),
+        ("CA", "CB", "CG", "CD"),
+        ("CB", "CG", "CD", "CE"),
+        ("CG", "CD", "CE", "NZ"),
+    ],
+    "GLU": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD")],
+    "GLN": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD")],
+    "MET": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "SD"), ("CB", "CG", "SD", "CE")],
+    "ILE": [("N", "CA", "CB", "CG1"), ("CA", "CB", "CG1", "CD1")],
+    "LEU": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD1")],
+    "VAL": [("N", "CA", "CB", "CG1")],
+    "THR": [("N", "CA", "CB", "OG1")],
+    "SER": [("N", "CA", "CB", "OG")],
+    "TYR": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD1")],
+    "PHE": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD1")],
+    "TRP": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD1")],
+    "ASN": [("N", "CA", "CB", "CG")],
+    "ASP": [("N", "CA", "CB", "CG")],
+    "HIS": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "ND1")],
+    "CYS": [("N", "CA", "CB", "SG")],
+    "PRO": [("N", "CA", "CB", "CG"), ("CA", "CB", "CG", "CD")],
 }
 
 # Polar elements for SASA classification
-POLAR_ELEMENTS: set[str] = {'O', 'N', 'S'}
+POLAR_ELEMENTS: set[str] = {"O", "N", "S"}

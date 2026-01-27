@@ -15,29 +15,28 @@ __all__ = [
     "main",
 ]
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional, Union
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
 
-import polars as pl
 import mdtraj as md
+import polars as pl
 
+from .anm import ANMBindingResult, ANMEntropyCalculator
 from .constants import (
-    DEFAULT_TEMPERATURE,
-    DEFAULT_TR_PENALTY,
-    DEFAULT_PROBE_RADIUS,
     DEFAULT_ALPHA_NP,
-    DEFAULT_BETA_POL,
     DEFAULT_ANM_CUTOFF,
     DEFAULT_ANM_GAMMA,
+    DEFAULT_BETA_POL,
+    DEFAULT_PROBE_RADIUS,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TR_PENALTY,
 )
+from .rotamer import RotamerBindingResult, RotamerEntropyCalculator
+from .sasa import SASABindingResult, SASACalculator
 from .structure import StructureLoader
-from .sasa import SASACalculator, SASABindingResult
-from .anm import ANMEntropyCalculator, ANMBindingResult
-from .rotamer import RotamerEntropyCalculator, RotamerBindingResult
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +44,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BindingEntropyResult:
     """Complete binding entropy calculation result."""
-    sasa: Optional[SASABindingResult]
-    anm: Optional[ANMBindingResult]
-    rotamer: Optional[RotamerBindingResult]
+
+    sasa: SASABindingResult | None
+    anm: ANMBindingResult | None
+    rotamer: RotamerBindingResult | None
     trans_rot_penalty: float
     temperature: float
     chain_a: str
@@ -76,55 +76,50 @@ class BindingEntropyResult:
     @property
     def total_negT_dS(self) -> float:
         """Total -T*dS in kcal/mol."""
-        return (
-            self.negT_dS_sasa +
-            self.negT_dS_vib +
-            self.negT_dS_rotamer +
-            self.negT_dS_TR
-        )
+        return self.negT_dS_sasa + self.negT_dS_vib + self.negT_dS_rotamer + self.negT_dS_TR
 
     def to_dataframe(self) -> pl.DataFrame:
         """Convert summary to DataFrame."""
         rows = [
-            {'term': '-T*dS_solvent', 'value_kcal': self.negT_dS_sasa},
-            {'term': '-T*dS_vibrational', 'value_kcal': self.negT_dS_vib},
-            {'term': '-T*dS_sidechain', 'value_kcal': self.negT_dS_rotamer},
-            {'term': '-T*dS_trans_rot', 'value_kcal': self.negT_dS_TR},
-            {'term': 'TOTAL -T*dS', 'value_kcal': self.total_negT_dS},
+            {"term": "-T*dS_solvent", "value_kcal": self.negT_dS_sasa},
+            {"term": "-T*dS_vibrational", "value_kcal": self.negT_dS_vib},
+            {"term": "-T*dS_sidechain", "value_kcal": self.negT_dS_rotamer},
+            {"term": "-T*dS_trans_rot", "value_kcal": self.negT_dS_TR},
+            {"term": "TOTAL -T*dS", "value_kcal": self.total_negT_dS},
         ]
         return pl.DataFrame(rows)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {
-            'temperature_K': self.temperature,
-            'chains': f"{self.chain_a},{self.chain_b}",
-            'terms': {
-                'negT_dS_solvent_kcal': self.negT_dS_sasa,
-                'negT_dS_vibrational_kcal': self.negT_dS_vib,
-                'negT_dS_sidechain_kcal': self.negT_dS_rotamer,
-                'negT_dS_trans_rot_kcal': self.negT_dS_TR,
-                'total_negT_dS_kcal': self.total_negT_dS,
+            "temperature_K": self.temperature,
+            "chains": f"{self.chain_a},{self.chain_b}",
+            "terms": {
+                "negT_dS_solvent_kcal": self.negT_dS_sasa,
+                "negT_dS_vibrational_kcal": self.negT_dS_vib,
+                "negT_dS_sidechain_kcal": self.negT_dS_rotamer,
+                "negT_dS_trans_rot_kcal": self.negT_dS_TR,
+                "total_negT_dS_kcal": self.total_negT_dS,
             },
         }
 
         if self.sasa:
-            result['sasa'] = {
-                'delta_total_A2': self.sasa.delta_total,
-                'delta_polar_A2': self.sasa.delta_polar,
-                'delta_nonpolar_A2': self.sasa.delta_nonpolar,
+            result["sasa"] = {
+                "delta_total_A2": self.sasa.delta_total,
+                "delta_polar_A2": self.sasa.delta_polar,
+                "delta_nonpolar_A2": self.sasa.delta_nonpolar,
             }
 
         if self.anm:
-            result['anm'] = {
-                'dS_kB': self.anm.dS_kB,
-                'n_modes_complex': self.anm.complex_result.n_modes,
+            result["anm"] = {
+                "dS_kB": self.anm.dS_kB,
+                "n_modes_complex": self.anm.complex_result.n_modes,
             }
 
         if self.rotamer:
-            result['rotamer'] = {
-                'n_residues': len(self.rotamer.per_residue),
-                'total_dS_kcal_per_K': self.rotamer.total_dS_kcal_per_K,
+            result["rotamer"] = {
+                "n_residues": len(self.rotamer.per_residue),
+                "total_dS_kcal_per_K": self.rotamer.total_dS_kcal_per_K,
             }
 
         return result
@@ -160,7 +155,7 @@ class BindingEntropyCalculator:
         anm_cutoff: float = DEFAULT_ANM_CUTOFF,
         anm_gamma: float = DEFAULT_ANM_GAMMA,
         # Rotamer options
-        rotlib_path: Optional[Union[str, Path]] = None,
+        rotlib_path: str | Path | None = None,
         # Component flags
         compute_sasa: bool = True,
         compute_anm: bool = True,
@@ -219,7 +214,7 @@ class BindingEntropyCalculator:
 
     def calculate(
         self,
-        pdb_path: Union[str, Path],
+        pdb_path: str | Path,
         chain_a: str,
         chain_b: str,
         frame: int = 0,
@@ -264,25 +259,19 @@ class BindingEntropyCalculator:
         sasa_result = None
         if self.sasa_calc:
             logger.info("Computing SASA entropy...")
-            sasa_result = self.sasa_calc.calculate_binding_delta(
-                traj, chain_a, chain_b, frame
-            )
+            sasa_result = self.sasa_calc.calculate_binding_delta(traj, chain_a, chain_b, frame)
 
         # ANM vibrational entropy (use trajectory directly, avoid re-parsing PDB)
         anm_result = None
         if self.anm_calc:
             logger.info("Computing ANM vibrational entropy...")
-            anm_result = self.anm_calc.calculate_binding_delta(
-                traj, chain_a, chain_b
-            )
+            anm_result = self.anm_calc.calculate_binding_delta(traj, chain_a, chain_b)
 
         # Rotamer entropy
         rotamer_result = None
         if self.rotamer_calc:
             logger.info("Computing rotamer entropy...")
-            rotamer_result = self.rotamer_calc.calculate_binding_delta(
-                traj, chain_a, chain_b
-            )
+            rotamer_result = self.rotamer_calc.calculate_binding_delta(traj, chain_a, chain_b)
 
         result = BindingEntropyResult(
             sasa=sasa_result,
@@ -307,39 +296,33 @@ class BindingEntropyCalculator:
     ) -> BindingEntropyResult:
         """Calculate entropy terms in parallel."""
         results = {
-            'sasa': None,
-            'anm': None,
-            'rotamer': None,
+            "sasa": None,
+            "anm": None,
+            "rotamer": None,
         }
 
         # Define calculation functions
         def calc_sasa():
             if self.sasa_calc:
-                return self.sasa_calc.calculate_binding_delta(
-                    traj, chain_a, chain_b, frame
-                )
+                return self.sasa_calc.calculate_binding_delta(traj, chain_a, chain_b, frame)
             return None
 
         def calc_anm():
             if self.anm_calc:
-                return self.anm_calc.calculate_binding_delta(
-                    traj, chain_a, chain_b
-                )
+                return self.anm_calc.calculate_binding_delta(traj, chain_a, chain_b)
             return None
 
         def calc_rotamer():
             if self.rotamer_calc:
-                return self.rotamer_calc.calculate_binding_delta(
-                    traj, chain_a, chain_b
-                )
+                return self.rotamer_calc.calculate_binding_delta(traj, chain_a, chain_b)
             return None
 
         # Run calculations in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
-                executor.submit(calc_sasa): 'sasa',
-                executor.submit(calc_anm): 'anm',
-                executor.submit(calc_rotamer): 'rotamer',
+                executor.submit(calc_sasa): "sasa",
+                executor.submit(calc_anm): "anm",
+                executor.submit(calc_rotamer): "rotamer",
             }
 
             for future in as_completed(futures):
@@ -351,9 +334,9 @@ class BindingEntropyCalculator:
                     raise
 
         result = BindingEntropyResult(
-            sasa=results['sasa'],
-            anm=results['anm'],
-            rotamer=results['rotamer'],
+            sasa=results["sasa"],
+            anm=results["anm"],
+            rotamer=results["rotamer"],
             trans_rot_penalty=self.trans_rot_penalty,
             temperature=self.temperature,
             chain_a=chain_a,
@@ -366,11 +349,11 @@ class BindingEntropyCalculator:
 
     def calculate_from_trajectory(
         self,
-        traj_path: Union[str, Path],
-        topology_path: Union[str, Path],
+        traj_path: str | Path,
+        topology_path: str | Path,
         chain_a: str,
         chain_b: str,
-        frames: Optional[list[int]] = None,
+        frames: list[int] | None = None,
     ) -> list[BindingEntropyResult]:
         """
         Calculate binding entropy for multiple frames of a trajectory.
@@ -393,21 +376,17 @@ class BindingEntropyCalculator:
 
         results = []
         for i, frame in enumerate(frames):
-            logger.info(f"Processing frame {frame} ({i+1}/{len(frames)})")
+            logger.info(f"Processing frame {frame} ({i + 1}/{len(frames)})")
 
             # SASA for this frame
             sasa_result = None
             if self.sasa_calc:
-                sasa_result = self.sasa_calc.calculate_binding_delta(
-                    traj, chain_a, chain_b, frame
-                )
+                sasa_result = self.sasa_calc.calculate_binding_delta(traj, chain_a, chain_b, frame)
 
             # ANM vibrational entropy for this frame
             anm_result = None
             if self.anm_calc:
-                anm_result = self.anm_calc.calculate_binding_delta(
-                    traj, chain_a, chain_b, frame
-                )
+                anm_result = self.anm_calc.calculate_binding_delta(traj, chain_a, chain_b, frame)
 
             # Rotamer entropy for this frame
             rotamer_result = None
@@ -434,7 +413,7 @@ class BindingEntropyCalculator:
     def save_results(
         self,
         result: BindingEntropyResult,
-        output_dir: Union[str, Path],
+        output_dir: str | Path,
         prefix: str = "binding_entropy",
     ) -> None:
         """
@@ -453,7 +432,7 @@ class BindingEntropyCalculator:
         summary_df.write_csv(output_dir / f"{prefix}_summary.csv")
 
         # Full results JSON
-        with open(output_dir / f"{prefix}_results.json", 'w') as f:
+        with open(output_dir / f"{prefix}_results.json", "w") as f:
             json.dump(result.to_dict(), f, indent=2)
 
         # Per-residue rotamer data if available
@@ -463,14 +442,18 @@ class BindingEntropyCalculator:
 
         # SASA interface data if available
         if result.sasa:
-            sasa_df = pl.DataFrame([{
-                'SASA_complex_A2': result.sasa.complex_sasa.total,
-                'SASA_chainA_A2': result.sasa.chain_a_sasa.total,
-                'SASA_chainB_A2': result.sasa.chain_b_sasa.total,
-                'delta_SASA_A2': result.sasa.delta_total,
-                'delta_polar_A2': result.sasa.delta_polar,
-                'delta_nonpolar_A2': result.sasa.delta_nonpolar,
-            }])
+            sasa_df = pl.DataFrame(
+                [
+                    {
+                        "SASA_complex_A2": result.sasa.complex_sasa.total,
+                        "SASA_chainA_A2": result.sasa.chain_a_sasa.total,
+                        "SASA_chainB_A2": result.sasa.chain_b_sasa.total,
+                        "delta_SASA_A2": result.sasa.delta_total,
+                        "delta_polar_A2": result.sasa.delta_polar,
+                        "delta_nonpolar_A2": result.sasa.delta_nonpolar,
+                    }
+                ]
+            )
             sasa_df.write_csv(output_dir / f"{prefix}_sasa.csv")
 
         logger.info(f"Results saved to {output_dir}")
@@ -480,42 +463,50 @@ def main():
     """Command-line interface."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description='Calculate binding entropy for protein complexes'
+    parser = argparse.ArgumentParser(description="Calculate binding entropy for protein complexes")
+    parser.add_argument("--pdb", required=True, help="PDB file path")
+    parser.add_argument("--chains", required=True, help="Chain IDs (e.g., A,B)")
+    parser.add_argument("--rotlib", help="Path to rotamer library")
+    parser.add_argument("--out", default="results", help="Output directory")
+    parser.add_argument("--T", type=float, default=DEFAULT_TEMPERATURE, help="Temperature (K)")
+    parser.add_argument(
+        "--tr-penalty",
+        type=float,
+        default=DEFAULT_TR_PENALTY,
+        help="-T*dS for TR entropy (kcal/mol)",
     )
-    parser.add_argument('--pdb', required=True, help='PDB file path')
-    parser.add_argument('--chains', required=True, help='Chain IDs (e.g., A,B)')
-    parser.add_argument('--rotlib', help='Path to rotamer library')
-    parser.add_argument('--out', default='results', help='Output directory')
-    parser.add_argument('--T', type=float, default=DEFAULT_TEMPERATURE,
-                        help='Temperature (K)')
-    parser.add_argument('--tr-penalty', type=float, default=DEFAULT_TR_PENALTY,
-                        help='-T*dS for TR entropy (kcal/mol)')
-    parser.add_argument('--probe-radius', type=float, default=DEFAULT_PROBE_RADIUS,
-                        help='SASA probe radius (Angstrom)')
-    parser.add_argument('--alpha-np', type=float, default=DEFAULT_ALPHA_NP,
-                        help='SASA nonpolar coefficient')
-    parser.add_argument('--beta-pol', type=float, default=DEFAULT_BETA_POL,
-                        help='SASA polar coefficient')
-    parser.add_argument('--anm-cutoff', type=float, default=DEFAULT_ANM_CUTOFF,
-                        help='ANM distance cutoff')
-    parser.add_argument('--anm-gamma', type=float, default=DEFAULT_ANM_GAMMA,
-                        help='ANM spring constant')
-    parser.add_argument('--no-sasa', action='store_true', help='Skip SASA')
-    parser.add_argument('--no-anm', action='store_true', help='Skip ANM')
-    parser.add_argument('--no-rotamer', action='store_true', help='Skip rotamer')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    parser.add_argument(
+        "--probe-radius",
+        type=float,
+        default=DEFAULT_PROBE_RADIUS,
+        help="SASA probe radius (Angstrom)",
+    )
+    parser.add_argument(
+        "--alpha-np", type=float, default=DEFAULT_ALPHA_NP, help="SASA nonpolar coefficient"
+    )
+    parser.add_argument(
+        "--beta-pol", type=float, default=DEFAULT_BETA_POL, help="SASA polar coefficient"
+    )
+    parser.add_argument(
+        "--anm-cutoff", type=float, default=DEFAULT_ANM_CUTOFF, help="ANM distance cutoff"
+    )
+    parser.add_argument(
+        "--anm-gamma", type=float, default=DEFAULT_ANM_GAMMA, help="ANM spring constant"
+    )
+    parser.add_argument("--no-sasa", action="store_true", help="Skip SASA")
+    parser.add_argument("--no-anm", action="store_true", help="Skip ANM")
+    parser.add_argument("--no-rotamer", action="store_true", help="Skip rotamer")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
     # Setup logging
     logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format='%(levelname)s: %(message)s'
+        level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s: %(message)s"
     )
 
     # Parse chains
-    chain_a, chain_b = [c.strip() for c in args.chains.split(',')]
+    chain_a, chain_b = [c.strip() for c in args.chains.split(",")]
 
     # Create calculator
     calc = BindingEntropyCalculator(
@@ -549,5 +540,5 @@ def main():
     print(f"Results saved to: {args.out}/")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

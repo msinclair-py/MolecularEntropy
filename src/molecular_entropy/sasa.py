@@ -12,9 +12,8 @@ __all__ = [
     "SASABindingResult",
 ]
 
-from dataclasses import dataclass
-from typing import Optional
 import logging
+from dataclasses import dataclass
 
 import mdtraj as md
 import numpy as np
@@ -23,13 +22,13 @@ import polars as pl
 from rust_simulation_tools import calculate_sasa, get_radii_array
 
 from .constants import (
-    POLAR_ELEMENTS,
-    DEFAULT_PROBE_RADIUS,
-    DEFAULT_N_SPHERE_POINTS,
+    ANGSTROM_PER_NM,
     DEFAULT_ALPHA_NP,
     DEFAULT_BETA_POL,
+    DEFAULT_N_SPHERE_POINTS,
+    DEFAULT_PROBE_RADIUS,
     DEFAULT_TEMPERATURE,
-    ANGSTROM_PER_NM,
+    POLAR_ELEMENTS,
 )
 from .structure import StructureLoader
 
@@ -39,15 +38,17 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SASAResult:
     """Results from SASA calculation."""
+
     total: float  # Total SASA in A^2
     polar: float  # Polar SASA in A^2
     nonpolar: float  # Nonpolar SASA in A^2
-    per_atom: Optional[npt.NDArray[np.float64]] = None
+    per_atom: npt.NDArray[np.float64] | None = None
 
 
 @dataclass
 class SASABindingResult:
     """Results from binding SASA change calculation."""
+
     delta_total: float  # SASA change (unbound - bound) in A^2
     delta_polar: float
     delta_nonpolar: float
@@ -92,11 +93,7 @@ class SASACalculator:
         self.beta_pol = beta_pol
         self.temperature = temperature
 
-    def compute_sasa(
-        self,
-        traj: md.Trajectory,
-        frame: int = 0
-    ) -> npt.NDArray[np.float64]:
+    def compute_sasa(self, traj: md.Trajectory, frame: int = 0) -> npt.NDArray[np.float64]:
         """
         Compute per-atom SASA in Angstrom^2.
 
@@ -113,13 +110,12 @@ class SASACalculator:
         coords = np.asarray(traj.xyz[frame] * ANGSTROM_PER_NM, dtype=np.float64)
 
         # Get element symbols and VDW radii
-        elements = [atom.element.symbol if atom.element else 'C' for atom in traj.topology.atoms]
+        elements = [atom.element.symbol if atom.element else "C" for atom in traj.topology.atoms]
         radii = np.asarray(get_radii_array(elements), dtype=np.float64)
 
         # Get residue indices
         residue_indices = np.array(
-            [atom.residue.index for atom in traj.topology.atoms],
-            dtype=np.int64
+            [atom.residue.index for atom in traj.topology.atoms], dtype=np.int64
         )
 
         # Calculate SASA using Rust backend (returns Angstrom^2)
@@ -131,12 +127,10 @@ class SASACalculator:
             n_sphere_points=self.n_sphere_points,
         )
 
-        return result['per_atom']
+        return result["per_atom"]
 
     def split_polar_nonpolar(
-        self,
-        traj: md.Trajectory,
-        sasa: npt.NDArray[np.float64]
+        self, traj: md.Trajectory, sasa: npt.NDArray[np.float64]
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """
         Split SASA into polar and nonpolar components.
@@ -152,7 +146,7 @@ class SASACalculator:
         nonpolar = np.zeros_like(sasa)
 
         for atom in traj.topology.atoms:
-            elem = atom.element.symbol if atom.element else ''
+            elem = atom.element.symbol if atom.element else ""
             if elem in POLAR_ELEMENTS:
                 polar[atom.index] = sasa[atom.index]
             else:
@@ -240,11 +234,7 @@ class SASACalculator:
             chain_b_sasa=sasa_b,
         )
 
-    def per_residue_sasa(
-        self,
-        traj: md.Trajectory,
-        frame: int = 0
-    ) -> pl.DataFrame:
+    def per_residue_sasa(self, traj: md.Trajectory, frame: int = 0) -> pl.DataFrame:
         """
         Calculate per-residue SASA.
 
@@ -266,16 +256,16 @@ class SASACalculator:
 
         rows = [
             {
-                'chain_id': chain_id,
-                'resSeq': resSeq,
-                'resName': resName,
-                'sasa_A2': sasa_val,
+                "chain_id": chain_id,
+                "resSeq": resSeq,
+                "resName": resName,
+                "sasa_A2": sasa_val,
             }
             for (chain_id, resSeq, resName), sasa_val in res_sasa.items()
         ]
 
         df = pl.DataFrame(rows)
-        return df.sort(['chain_id', 'resSeq'])
+        return df.sort(["chain_id", "resSeq"])
 
     def detect_interface(
         self,
@@ -311,19 +301,16 @@ class SASACalculator:
 
         # Merge and compute delta
         merged = sasa_unbound.join(
-            sasa_complex,
-            on=['chain_id', 'resSeq', 'resName'],
-            suffix='_bound',
-            how='full'
+            sasa_complex, on=["chain_id", "resSeq", "resName"], suffix="_bound", how="full"
         ).fill_null(0.0)
 
         # Rename sasa_A2 to sasa_A2_unbound for clarity
-        merged = merged.rename({'sasa_A2': 'sasa_A2_unbound'})
+        merged = merged.rename({"sasa_A2": "sasa_A2_unbound"})
 
         merged = merged.with_columns(
-            (pl.col('sasa_A2_unbound') - pl.col('sasa_A2_bound')).alias('delta_sasa_A2')
+            (pl.col("sasa_A2_unbound") - pl.col("sasa_A2_bound")).alias("delta_sasa_A2")
         )
 
         # Filter by threshold
-        interface = merged.filter(pl.col('delta_sasa_A2') >= threshold)
-        return interface.sort(['chain_id', 'resSeq'])
+        interface = merged.filter(pl.col("delta_sasa_A2") >= threshold)
+        return interface.sort(["chain_id", "resSeq"])

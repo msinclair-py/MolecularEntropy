@@ -22,11 +22,7 @@ pub fn build_kdtree(coords: &ArrayView1<f64>, n_points: usize) -> KdTree<f64, 3>
     let mut tree: KdTree<f64, 3> = KdTree::new();
 
     for i in 0..n_points {
-        let point: [f64; 3] = [
-            coords[i * 3],
-            coords[i * 3 + 1],
-            coords[i * 3 + 2],
-        ];
+        let point: [f64; 3] = [coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]];
         tree.add(&point, i as u64);
     }
 
@@ -200,7 +196,10 @@ pub fn build_kdtree_and_query_batch(
                 let neighbors = tree.within::<SquaredEuclidean>(&query_point, radius_sq);
 
                 // Extract indices as usize
-                neighbors.iter().map(|n| n.item as usize).collect::<Vec<usize>>()
+                neighbors
+                    .iter()
+                    .map(|n| n.item as usize)
+                    .collect::<Vec<usize>>()
             })
             .collect()
     });

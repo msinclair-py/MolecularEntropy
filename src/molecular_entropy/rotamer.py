@@ -18,13 +18,11 @@ __all__ = [
     "clear_backbone_cache",
 ]
 
+import logging
+import pickle
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
-import logging
-import pickle
-import hashlib
 
 import mdtraj as md
 import numpy as np
@@ -32,9 +30,9 @@ import polars as pl
 from scipy.spatial import cKDTree
 
 from .constants import (
-    R_KCAL,
     CHI_RESIDUES,
     DEFAULT_TEMPERATURE,
+    R_KCAL,
 )
 from .structure import StructureLoader
 
@@ -44,8 +42,11 @@ logger = logging.getLogger(__name__)
 try:
     from molecular_entropy._core import (
         check_clashes_batch as _rust_check_clashes_batch,
+    )
+    from molecular_entropy._core import (
         compute_rotamer_entropies_batch as _rust_compute_entropies_batch,
     )
+
     _USE_RUST = True
     logger.debug("Using Rust extension for performance")
 except ImportError:
@@ -71,6 +72,7 @@ def clear_backbone_cache() -> None:
 @dataclass
 class ResidueRotamerResult:
     """Rotamer entropy for a single residue."""
+
     chain_id: str
     resSeq: int
     resName: str
@@ -85,6 +87,7 @@ class ResidueRotamerResult:
 @dataclass
 class RotamerBindingResult:
     """Results from binding rotamer entropy calculation."""
+
     total_dS_kcal_per_K: float  # Sum of dS for all residues
     total_negT_dS_kcal: float  # Sum of -T*dS in kcal/mol
     per_residue: list[ResidueRotamerResult]
@@ -107,7 +110,7 @@ class RotamerEntropyCalculator:
 
     def __init__(
         self,
-        rotlib_path: Optional[Union[str, Path]] = None,
+        rotlib_path: str | Path | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         clash_distance: float = 2.5,  # Angstrom
         use_cache: bool = True,
@@ -130,7 +133,7 @@ class RotamerEntropyCalculator:
         if rotlib_path:
             self.load_rotamer_library(rotlib_path, use_cache=use_cache)
 
-    def load_rotamer_library(self, path: Union[str, Path], use_cache: bool = True) -> None:
+    def load_rotamer_library(self, path: str | Path, use_cache: bool = True) -> None:
         """
         Load Dunbrack backbone-dependent rotamer library.
 
@@ -146,14 +149,14 @@ class RotamerEntropyCalculator:
             raise FileNotFoundError(f"Rotamer library not found: {path}")
 
         # Try to load from binary cache first
-        if use_cache and path.suffix == '.parquet':
+        if use_cache and path.suffix == ".parquet":
             cache_path = self._get_cache_path(path)
             if self._try_load_from_cache(path, cache_path):
                 logger.info(f"Loaded rotamer library from cache ({len(self.rotlib_index)} entries)")
                 return
 
         # Load from source file
-        if path.suffix == '.parquet':
+        if path.suffix == ".parquet":
             self.rotlib = pl.read_parquet(path)
             self._build_index_from_parquet()
 
@@ -161,8 +164,9 @@ class RotamerEntropyCalculator:
             if use_cache:
                 self._save_to_cache(path, cache_path)
 
-        elif path.suffix == '.json':
+        elif path.suffix == ".json":
             import json
+
             with open(path) as f:
                 data = json.load(f)
             self._build_index_from_json(data)
@@ -173,7 +177,7 @@ class RotamerEntropyCalculator:
 
     def _get_cache_path(self, source_path: Path) -> Path:
         """Get path to binary cache file for a rotamer library."""
-        return source_path.with_suffix('.index.pkl')
+        return source_path.with_suffix(".index.pkl")
 
     def _try_load_from_cache(self, source_path: Path, cache_path: Path) -> bool:
         """
@@ -191,19 +195,19 @@ class RotamerEntropyCalculator:
             return False
 
         try:
-            with open(cache_path, 'rb') as f:
+            with open(cache_path, "rb") as f:
                 cache_data = pickle.load(f)
 
             # Validate cache version/format
-            if not isinstance(cache_data, dict) or 'version' not in cache_data:
+            if not isinstance(cache_data, dict) or "version" not in cache_data:
                 logger.debug("Cache format invalid, rebuilding")
                 return False
 
-            if cache_data['version'] != 1:
+            if cache_data["version"] != 1:
                 logger.debug("Cache version mismatch, rebuilding")
                 return False
 
-            self.rotlib_index = cache_data['index']
+            self.rotlib_index = cache_data["index"]
             self.rotlib = None  # Don't need raw dataframe when using cache
             return True
 
@@ -215,11 +219,11 @@ class RotamerEntropyCalculator:
         """Save rotamer index to binary cache."""
         try:
             cache_data = {
-                'version': 1,
-                'source': str(source_path),
-                'index': self.rotlib_index,
+                "version": 1,
+                "source": str(source_path),
+                "index": self.rotlib_index,
             }
-            with open(cache_path, 'wb') as f:
+            with open(cache_path, "wb") as f:
                 pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
             logger.debug(f"Saved rotamer index cache to {cache_path}")
         except Exception as e:
@@ -228,21 +232,25 @@ class RotamerEntropyCalculator:
     def _build_index_from_parquet(self) -> None:
         """Build lookup index from parquet dataframe using vectorized operations."""
         # Cast and filter in polars (vectorized)
-        df = self.rotlib.with_columns([
-            pl.col('prob').cast(pl.Float64, strict=False).fill_null(0.0),
-            pl.col('chi1').cast(pl.Float64, strict=False),
-            pl.col('chi2').cast(pl.Float64, strict=False),
-            pl.col('chi3').cast(pl.Float64, strict=False),
-            pl.col('chi4').cast(pl.Float64, strict=False),
-        ]).filter(pl.col('prob') > 0)
+        df = self.rotlib.with_columns(
+            [
+                pl.col("prob").cast(pl.Float64, strict=False).fill_null(0.0),
+                pl.col("chi1").cast(pl.Float64, strict=False),
+                pl.col("chi2").cast(pl.Float64, strict=False),
+                pl.col("chi3").cast(pl.Float64, strict=False),
+                pl.col("chi4").cast(pl.Float64, strict=False),
+            ]
+        ).filter(pl.col("prob") > 0)
 
         # Single-pass grouping using to_dicts()
         rows = df.to_dicts()
         groups = defaultdict(list)
         for row in rows:
-            key = (row['resname'].upper(), int(row['phi']), int(row['psi']))
-            chi_vals = [row[col] for col in ['chi1', 'chi2', 'chi3', 'chi4'] if row[col] is not None]
-            groups[key].append({'chi': chi_vals, 'p': row['prob']})
+            key = (row["resname"].upper(), int(row["phi"]), int(row["psi"]))
+            chi_vals = [
+                row[col] for col in ["chi1", "chi2", "chi3", "chi4"] if row[col] is not None
+            ]
+            groups[key].append({"chi": chi_vals, "p": row["prob"]})
 
         self.rotlib_index = dict(groups)
 
@@ -250,8 +258,8 @@ class RotamerEntropyCalculator:
         """Build lookup index from JSON data."""
         self.rotlib_index = {}
         for row in data:
-            key = (row['resname'].upper(), int(row['phi_bin']), int(row['psi_bin']))
-            self.rotlib_index[key] = row['rotamers']
+            key = (row["resname"].upper(), int(row["phi_bin"]), int(row["psi_bin"]))
+            self.rotlib_index[key] = row["rotamers"]
 
     @staticmethod
     def angle_to_bin(angle_deg: float, bin_size: int = 60) -> int:
@@ -276,9 +284,7 @@ class RotamerEntropyCalculator:
         return bin_center
 
     def compute_backbone_bins(
-        self,
-        traj: md.Trajectory,
-        use_cache: bool = True
+        self, traj: md.Trajectory, use_cache: bool = True
     ) -> dict[int, tuple[int, int]]:
         """
         Compute backbone phi/psi bins for all residues.
@@ -306,10 +312,7 @@ class RotamerEntropyCalculator:
             phi = phi_map.get(res.index)
             psi = psi_map.get(res.index)
             if phi is not None and psi is not None:
-                bins[res.index] = (
-                    self.angle_to_bin(phi),
-                    self.angle_to_bin(psi)
-                )
+                bins[res.index] = (self.angle_to_bin(phi), self.angle_to_bin(psi))
             else:
                 bins[res.index] = (None, None)
 
@@ -353,8 +356,9 @@ class RotamerEntropyCalculator:
             cKDTree for spatial queries
         """
         partner_heavy = [
-            a.index for a in partner_traj.topology.atoms
-            if a.element is not None and a.element.symbol != 'H'
+            a.index
+            for a in partner_traj.topology.atoms
+            if a.element is not None and a.element.symbol != "H"
         ]
         return cKDTree(partner_traj.xyz[0][partner_heavy])
 
@@ -363,7 +367,7 @@ class RotamerEntropyCalculator:
         traj: md.Trajectory,
         residue,
         partner_traj: md.Trajectory,
-        _partner_kdtree: Optional[cKDTree] = None,
+        _partner_kdtree: cKDTree | None = None,
     ) -> bool:
         """
         Check if residue side chain clashes with partner chain using KD-tree.
@@ -378,11 +382,8 @@ class RotamerEntropyCalculator:
             True if there are close contacts (clashes likely for some rotamers)
         """
         # Get side-chain heavy atom indices for this residue
-        backbone_names = {'N', 'CA', 'C', 'O', 'OXT', 'H', 'H1', 'H2', 'H3'}
-        sc_atoms = [
-            a.index for a in residue.atoms
-            if a.name not in backbone_names
-        ]
+        backbone_names = {"N", "CA", "C", "O", "OXT", "H", "H1", "H2", "H3"}
+        sc_atoms = [a.index for a in residue.atoms if a.name not in backbone_names]
 
         if not sc_atoms:
             return False
@@ -422,21 +423,21 @@ class RotamerEntropyCalculator:
             return np.ones(n, dtype=bool)
 
         # Sort by probability, keep top n_keep
-        probs = [r['p'] for r in rotamers]
+        probs = [r["p"] for r in rotamers]
         order = np.argsort(probs)[::-1]
 
         mask = np.zeros(n, dtype=bool)
-        mask[order[:min(n_keep, n)]] = True
+        mask[order[: min(n_keep, n)]] = True
         return mask
 
     def calculate_residue_entropy(
         self,
         traj: md.Trajectory,
         residue,
-        partner_traj: Optional[md.Trajectory],
+        partner_traj: md.Trajectory | None,
         backbone_bins: dict[int, tuple[int, int]],
-        _partner_kdtree: Optional[cKDTree] = None,
-    ) -> Optional[ResidueRotamerResult]:
+        _partner_kdtree: cKDTree | None = None,
+    ) -> ResidueRotamerResult | None:
         """
         Calculate rotamer entropy for a single residue.
 
@@ -466,7 +467,7 @@ class RotamerEntropyCalculator:
             return None
 
         # Unbound entropy (all rotamers available)
-        p_unbound = np.array([r['p'] for r in rotamers])
+        p_unbound = np.array([r["p"] for r in rotamers])
         S_unbound = self.compute_entropy_from_probs(p_unbound)
 
         # Bound entropy (some rotamers may be excluded due to clashes)
@@ -518,10 +519,16 @@ class RotamerEntropyCalculator:
         traj_b = StructureLoader.select_chain(traj, chain_b)
 
         # Get heavy atom coordinates for each partner chain
-        heavy_a = [a.index for a in traj_a.topology.atoms
-                   if a.element is not None and a.element.symbol != 'H']
-        heavy_b = [a.index for a in traj_b.topology.atoms
-                   if a.element is not None and a.element.symbol != 'H']
+        heavy_a = [
+            a.index
+            for a in traj_a.topology.atoms
+            if a.element is not None and a.element.symbol != "H"
+        ]
+        heavy_b = [
+            a.index
+            for a in traj_b.topology.atoms
+            if a.element is not None and a.element.symbol != "H"
+        ]
         partner_coords_a = np.ascontiguousarray(traj_a.xyz[0][heavy_a], dtype=np.float64)
         partner_coords_b = np.ascontiguousarray(traj_b.xyz[0][heavy_b], dtype=np.float64)
 
@@ -529,7 +536,7 @@ class RotamerEntropyCalculator:
         backbone_bins = self.compute_backbone_bins(traj)
 
         # Collect residue data for batch processing
-        backbone_names = {'N', 'CA', 'C', 'O', 'OXT', 'H', 'H1', 'H2', 'H3'}
+        backbone_names = {"N", "CA", "C", "O", "OXT", "H", "H1", "H2", "H3"}
         residue_data_a = []  # Residues in chain A (partner is B)
         residue_data_b = []  # Residues in chain B (partner is A)
 
@@ -554,10 +561,10 @@ class RotamerEntropyCalculator:
                 continue
 
             data = {
-                'res': res,
-                'sc_atom_range': (min(sc_atoms), max(sc_atoms) + 1),
-                'rotamers': rotamers,
-                'probs': np.array([r['p'] for r in rotamers], dtype=np.float64),
+                "res": res,
+                "sc_atom_range": (min(sc_atoms), max(sc_atoms) + 1),
+                "rotamers": rotamers,
+                "probs": np.array([r["p"] for r in rotamers], dtype=np.float64),
             }
 
             if res.chain.chain_id == chain_a:
@@ -579,7 +586,7 @@ class RotamerEntropyCalculator:
             if not residue_data:
                 continue
 
-            atom_ranges = [d['sc_atom_range'] for d in residue_data]
+            atom_ranges = [d["sc_atom_range"] for d in residue_data]
 
             # Use Rust batch clash detection
             clash_results = _rust_check_clashes_batch(
@@ -590,8 +597,8 @@ class RotamerEntropyCalculator:
             prob_arrays = []
             feasible_masks = []
             for data, has_clash in zip(residue_data, clash_results):
-                probs = data['probs']
-                mask = self.heuristic_feasible_mask(has_clash, data['rotamers'])
+                probs = data["probs"]
+                mask = self.heuristic_feasible_mask(has_clash, data["rotamers"])
                 prob_arrays.append(probs)
                 feasible_masks.append(mask)
 
@@ -602,22 +609,24 @@ class RotamerEntropyCalculator:
 
             # Build results
             for data, s_unbound, s_bound in zip(residue_data, s_unbound_list, s_bound_list):
-                res = data['res']
-                probs = data['probs']
+                res = data["res"]
+                probs = data["probs"]
                 dS = s_bound - s_unbound
                 negT_dS = -self.temperature * dS
 
-                results.append(ResidueRotamerResult(
-                    chain_id=res.chain.chain_id,
-                    resSeq=res.resSeq,
-                    resName=res.name,
-                    S_unbound_kcal_per_K=s_unbound,
-                    S_bound_kcal_per_K=s_bound,
-                    dS_kcal_per_K=dS,
-                    negT_dS_kcal=negT_dS,
-                    n_rotamers_unbound=len(probs),
-                    n_rotamers_bound=int(np.sum(data['probs'] > 0)),
-                ))
+                results.append(
+                    ResidueRotamerResult(
+                        chain_id=res.chain.chain_id,
+                        resSeq=res.resSeq,
+                        resName=res.name,
+                        S_unbound_kcal_per_K=s_unbound,
+                        S_bound_kcal_per_K=s_bound,
+                        dS_kcal_per_K=dS,
+                        negT_dS_kcal=negT_dS,
+                        n_rotamers_unbound=len(probs),
+                        n_rotamers_bound=int(np.sum(data["probs"] > 0)),
+                    )
+                )
 
         # Sum up contributions
         total_dS = sum(r.dS_kcal_per_K for r in results)
@@ -736,19 +745,21 @@ class RotamerEntropyCalculator:
         """
         rows = []
         for r in result.per_residue:
-            rows.append({
-                'chain_id': r.chain_id,
-                'resSeq': r.resSeq,
-                'resName': r.resName,
-                'S_unbound_kcal_per_K': r.S_unbound_kcal_per_K,
-                'S_bound_kcal_per_K': r.S_bound_kcal_per_K,
-                'dS_kcal_per_K': r.dS_kcal_per_K,
-                'negT_dS_kcal': r.negT_dS_kcal,
-                'n_rotamers_unbound': r.n_rotamers_unbound,
-                'n_rotamers_bound': r.n_rotamers_bound,
-            })
+            rows.append(
+                {
+                    "chain_id": r.chain_id,
+                    "resSeq": r.resSeq,
+                    "resName": r.resName,
+                    "S_unbound_kcal_per_K": r.S_unbound_kcal_per_K,
+                    "S_bound_kcal_per_K": r.S_bound_kcal_per_K,
+                    "dS_kcal_per_K": r.dS_kcal_per_K,
+                    "negT_dS_kcal": r.negT_dS_kcal,
+                    "n_rotamers_unbound": r.n_rotamers_unbound,
+                    "n_rotamers_bound": r.n_rotamers_bound,
+                }
+            )
 
         df = pl.DataFrame(rows)
         if len(df) > 0:
-            df = df.sort(['chain_id', 'resSeq'])
+            df = df.sort(["chain_id", "resSeq"])
         return df

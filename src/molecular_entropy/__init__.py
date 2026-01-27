@@ -17,12 +17,12 @@ Usage:
     print(result.to_dataframe())
 """
 
-from .constants import R_KCAL, KB_KCAL
-from .structure import StructureLoader
-from .sasa import SASACalculator
 from .anm import ANMEntropyCalculator
-from .rotamer import RotamerEntropyCalculator
+from .constants import KB_KCAL, R_KCAL
 from .driver import BindingEntropyCalculator, BindingEntropyResult
+from .rotamer import RotamerEntropyCalculator
+from .sasa import SASACalculator
+from .structure import StructureLoader
 
 __version__ = "0.1.0"
 __all__ = [

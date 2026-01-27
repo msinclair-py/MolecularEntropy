@@ -40,7 +40,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(kdtree::build_kdtree_and_query_batch, m)?)?;
 
     // Entropy calculations
-    m.add_function(wrap_pyfunction!(entropy::compute_rotamer_entropies_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        entropy::compute_rotamer_entropies_batch,
+        m
+    )?)?;
 
     // ANM operations
     m.add_function(wrap_pyfunction!(anm::build_anm_hessian_coo, m)?)?;

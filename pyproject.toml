@@ -87,5 +87,15 @@ plugins = ['numpy.typing.mypy_plugin']
 [tool.ruff]
 line-length = 100
 target-version = 'py310'
+
+[tool.ruff.lint]
 select = ['E', 'F', 'I', 'N', 'W', 'UP', 'B', 'C4', 'SIM']
-ignore = ['E501']  # Line length handled separately
+ignore = [
+    'E501',  # Line length handled separately
+    'N802',  # Function name should be lowercase (scientific notation)
+    'N806',  # Variable in function should be lowercase (scientific notation)
+    'N815',  # Variable in class scope should not be mixedCase (scientific notation)
+    'SIM102',  # Use single if statement (sometimes clearer nested)
+    'SIM108',  # Use ternary operator (sometimes clearer explicit)
+    'B905',  # zip() without strict= (not needed for equal-length iterables)
+]

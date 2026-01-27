@@ -11,9 +11,8 @@ __all__ = [
     "ChainNotFoundError",
 ]
 
-from pathlib import Path
-from typing import Optional, Union
 import logging
+from pathlib import Path
 
 import mdtraj as md
 import numpy as np
@@ -23,11 +22,13 @@ logger = logging.getLogger(__name__)
 
 class StructureLoadError(Exception):
     """Raised when a structure cannot be loaded."""
+
     pass
 
 
 class ChainNotFoundError(Exception):
     """Raised when a specified chain is not found in the structure."""
+
     pass
 
 
@@ -35,10 +36,7 @@ class StructureLoader:
     """Unified structure loading interface using mdtraj."""
 
     @staticmethod
-    def load(
-        path: Union[str, Path],
-        topology: Optional[Union[str, Path]] = None
-    ) -> md.Trajectory:
+    def load(path: str | Path, topology: str | Path | None = None) -> md.Trajectory:
         """
         Load a structure from PDB or trajectory file.
 
@@ -95,15 +93,10 @@ class StructureLoader:
                 return traj.atom_slice(atom_idx)
 
         available = StructureLoader.get_chain_ids(traj)
-        raise ChainNotFoundError(
-            f"Chain '{chain_id}' not found. Available chains: {available}"
-        )
+        raise ChainNotFoundError(f"Chain '{chain_id}' not found. Available chains: {available}")
 
     @staticmethod
-    def select_chains(
-        traj: md.Trajectory,
-        chain_ids: list[str]
-    ) -> md.Trajectory:
+    def select_chains(traj: md.Trajectory, chain_ids: list[str]) -> md.Trajectory:
         """
         Select multiple chains from the trajectory.
 
@@ -128,15 +121,13 @@ class StructureLoader:
         missing = set(chain_ids) - found_chains
         if missing:
             available = StructureLoader.get_chain_ids(traj)
-            raise ChainNotFoundError(
-                f"Chains not found: {missing}. Available: {available}"
-            )
+            raise ChainNotFoundError(f"Chains not found: {missing}. Available: {available}")
 
         return traj.atom_slice(sorted(atom_idx))
 
     @staticmethod
     def compute_backbone_dihedrals(
-        traj: md.Trajectory
+        traj: md.Trajectory,
     ) -> tuple[dict[int, float], dict[int, float]]:
         """
         Compute phi and psi backbone dihedrals for all residues.
@@ -179,10 +170,12 @@ class StructureLoader:
         """
         residues = []
         for res in traj.topology.residues:
-            residues.append({
-                'index': res.index,
-                'name': res.name,
-                'resSeq': res.resSeq,
-                'chain_id': res.chain.chain_id,
-            })
+            residues.append(
+                {
+                    "index": res.index,
+                    "name": res.name,
+                    "resSeq": res.resSeq,
+                    "chain_id": res.chain.chain_id,
+                }
+            )
         return residues

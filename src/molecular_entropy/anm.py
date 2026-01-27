@@ -18,23 +18,22 @@ __all__ = [
     "compute_anm_eigenvalues_sparse",
 ]
 
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
-from typing import Optional, Union
 
+import mdtraj as md
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import eigsh
 from scipy.spatial import cKDTree
-import mdtraj as md
 
 from .constants import (
-    KB_KCAL,
     DEFAULT_ANM_CUTOFF,
     DEFAULT_ANM_GAMMA,
     DEFAULT_TEMPERATURE,
+    KB_KCAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +43,7 @@ try:
     from molecular_entropy._core import (
         build_anm_hessian_coo as rust_build_hessian_coo,
     )
+
     _RUST_ANM_AVAILABLE = True
 except ImportError:
     _RUST_ANM_AVAILABLE = False
@@ -79,7 +79,7 @@ def build_sparse_hessian(
     tree = cKDTree(coords)
 
     # Find all pairs within cutoff
-    pairs = tree.query_pairs(cutoff, output_type='ndarray')
+    pairs = tree.query_pairs(cutoff, output_type="ndarray")
     n_pairs = len(pairs)
 
     if n_pairs == 0:
@@ -104,7 +104,7 @@ def build_sparse_hessian(
 
     # Compute outer products: -gamma * (r_ij ⊗ r_ij) / |r_ij|²
     # Shape: (n_valid, 3, 3)
-    blocks = -gamma * np.einsum('ij,ik->ijk', r_ij, r_ij) / dist_sq[:, None, None]
+    blocks = -gamma * np.einsum("ij,ik->ijk", r_ij, r_ij) / dist_sq[:, None, None]
     blocks_flat = blocks.reshape(n_valid, 9)  # Shape: (n_valid, 9)
 
     # Build COO format data - fully vectorized
@@ -127,9 +127,7 @@ def build_sparse_hessian(
 
     # Create sparse matrix from off-diagonal entries
     hessian = csr_matrix(
-        (data_offdiag, (row_offdiag, col_offdiag)),
-        shape=(n_dof, n_dof),
-        dtype=np.float64
+        (data_offdiag, (row_offdiag, col_offdiag)), shape=(n_dof, n_dof), dtype=np.float64
     )
 
     # Diagonal blocks: sum of negative off-diagonal blocks for each atom
@@ -146,9 +144,7 @@ def build_sparse_hessian(
     diag_data = diag_blocks.ravel()
 
     diag_matrix = csr_matrix(
-        (diag_data, (diag_row, diag_col)),
-        shape=(n_dof, n_dof),
-        dtype=np.float64
+        (diag_data, (diag_row, diag_col)), shape=(n_dof, n_dof), dtype=np.float64
     )
 
     return hessian + diag_matrix
@@ -196,7 +192,7 @@ def compute_anm_eigenvalues_sparse(
             hessian,
             k=k,
             sigma=1e-4,  # Shift-invert: find eigenvalues closest to this value
-            which='LM',  # Largest magnitude of (H - sigma*I)^-1 = closest to sigma
+            which="LM",  # Largest magnitude of (H - sigma*I)^-1 = closest to sigma
             tol=1e-5,
             maxiter=500,
         )
@@ -216,6 +212,7 @@ def compute_anm_eigenvalues_sparse(
 @dataclass
 class ANMEntropyResult:
     """Results from ANM entropy calculation."""
+
     S_kB: float  # Entropy in k_B units
     S_kcal_per_K: float  # Entropy in kcal/mol/K
     n_modes: int  # Number of non-trivial modes used
@@ -224,6 +221,7 @@ class ANMEntropyResult:
 @dataclass
 class ANMBindingResult:
     """Results from binding ANM entropy calculation."""
+
     dS_kB: float  # Delta entropy in k_B units
     dS_kcal_per_K: float  # Delta entropy in kcal/mol/K
     negT_dS_kcal: float  # -T*dS in kcal/mol
@@ -311,11 +309,8 @@ class ANMEntropyCalculator:
 
         # Convert to scipy sparse matrix
         from scipy.sparse import coo_matrix
-        hessian = coo_matrix(
-            (data, (rows, cols)),
-            shape=(n_dof, n_dof),
-            dtype=np.float64
-        ).tocsr()
+
+        hessian = coo_matrix((data, (rows, cols)), shape=(n_dof, n_dof), dtype=np.float64).tocsr()
 
         # Use scipy shift-invert eigensolver (accurate for smallest eigenvalues)
         k = min(6 + self.n_modes + 6, n_dof - 1)
@@ -324,7 +319,7 @@ class ANMEntropyCalculator:
                 hessian,
                 k=k,
                 sigma=1e-4,
-                which='LM',
+                which="LM",
                 tol=1e-5,
                 maxiter=500,
             )
@@ -336,7 +331,7 @@ class ANMEntropyCalculator:
         eigenvalues = np.sort(np.abs(eigenvalues))
         non_trivial = eigenvalues[eigenvalues > 1e-6]
 
-        return self._entropy_from_eigenvalues(non_trivial[:self.n_modes])
+        return self._entropy_from_eigenvalues(non_trivial[: self.n_modes])
 
     def _compute_entropy_sparse(
         self,
@@ -368,10 +363,7 @@ class ANMEntropyCalculator:
 
         return self._entropy_from_eigenvalues(eigenvalues)
 
-    def _entropy_from_eigenvalues(
-        self,
-        eigenvalues: np.ndarray
-    ) -> ANMEntropyResult:
+    def _entropy_from_eigenvalues(self, eigenvalues: np.ndarray) -> ANMEntropyResult:
         """
         Calculate entropy from ANM eigenvalues.
 
@@ -404,7 +396,7 @@ class ANMEntropyCalculator:
     def _extract_ca_coords(
         self,
         traj: md.Trajectory,
-        chain_id: Optional[str] = None,
+        chain_id: str | None = None,
         frame: int = 0,
     ) -> np.ndarray:
         """
@@ -420,7 +412,7 @@ class ANMEntropyCalculator:
         """
         ca_indices = []
         for atom in traj.topology.atoms:
-            if atom.name == 'CA':
+            if atom.name == "CA":
                 if chain_id is None or atom.residue.chain.chain_id == chain_id:
                     ca_indices.append(atom.index)
 
@@ -453,9 +445,7 @@ class ANMEntropyCalculator:
         return result
 
     def calculate_from_pdb(
-        self,
-        pdb_path: Union[str, Path],
-        chain_id: Optional[str] = None
+        self, pdb_path: str | Path, chain_id: str | None = None
     ) -> ANMEntropyResult:
         """
         Calculate vibrational entropy directly from PDB file.
@@ -504,7 +494,7 @@ class ANMEntropyCalculator:
         ca_indices_b = []
 
         for atom in traj.topology.atoms:
-            if atom.name == 'CA':
+            if atom.name == "CA":
                 ca_indices_complex.append(atom.index)
                 chain_id = atom.residue.chain.chain_id
                 if chain_id == chain_a:
@@ -553,24 +543,19 @@ class ANMEntropyCalculator:
         )
 
         if self.parallel:
-            result = self._compute_binding_parallel(
-                coords_complex, coords_a, coords_b
-            )
+            result = self._compute_binding_parallel(coords_complex, coords_a, coords_b)
         else:
-            result = self._compute_binding_sequential(
-                coords_complex, coords_a, coords_b
-            )
+            result = self._compute_binding_sequential(coords_complex, coords_a, coords_b)
 
         logger.info(
-            f"ANM binding: dS = {result.dS_kB:.2f} k_B, "
-            f"-T*dS = {result.negT_dS_kcal:.3f} kcal/mol"
+            f"ANM binding: dS = {result.dS_kB:.2f} k_B, -T*dS = {result.negT_dS_kcal:.3f} kcal/mol"
         )
 
         return result
 
     def calculate_binding_delta_from_pdb(
         self,
-        pdb_path: Union[str, Path],
+        pdb_path: str | Path,
         chain_a: str,
         chain_b: str,
     ) -> ANMBindingResult:
@@ -599,18 +584,16 @@ class ANMEntropyCalculator:
 
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
-                executor.submit(self._compute_entropy_sparse, coords_complex): 'complex',
-                executor.submit(self._compute_entropy_sparse, coords_a): 'a',
-                executor.submit(self._compute_entropy_sparse, coords_b): 'b',
+                executor.submit(self._compute_entropy_sparse, coords_complex): "complex",
+                executor.submit(self._compute_entropy_sparse, coords_a): "a",
+                executor.submit(self._compute_entropy_sparse, coords_b): "b",
             }
 
             for future in as_completed(futures):
                 name = futures[future]
                 results[name] = future.result()
 
-        return self._build_binding_result(
-            results['complex'], results['a'], results['b']
-        )
+        return self._build_binding_result(results["complex"], results["a"], results["b"])
 
     def _compute_binding_sequential(
         self,
@@ -633,7 +616,9 @@ class ANMEntropyCalculator:
     ) -> ANMBindingResult:
         """Build ANMBindingResult from individual chain results."""
         dS_kB = complex_result.S_kB - chain_a_result.S_kB - chain_b_result.S_kB
-        dS_kcal_per_K = complex_result.S_kcal_per_K - chain_a_result.S_kcal_per_K - chain_b_result.S_kcal_per_K
+        dS_kcal_per_K = (
+            complex_result.S_kcal_per_K - chain_a_result.S_kcal_per_K - chain_b_result.S_kcal_per_K
+        )
         negT_dS_kcal = -self.temperature * dS_kcal_per_K
 
         return ANMBindingResult(

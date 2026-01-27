@@ -132,7 +132,9 @@ pub fn lanczos_smallest_eigenvalues(
     let m = (n_modes * 5 + 50).min(n / 2).min(300).max(n_modes + 6);
 
     // Initialize with random starting vector
-    let mut v: Vec<f64> = (0..n).map(|i| ((i * 7 + 3) % 100) as f64 / 100.0 - 0.5).collect();
+    let mut v: Vec<f64> = (0..n)
+        .map(|i| ((i * 7 + 3) % 100) as f64 / 100.0 - 0.5)
+        .collect();
 
     // Normalize
     let norm: f64 = v.iter().map(|x| x * x).sum::<f64>().sqrt();
