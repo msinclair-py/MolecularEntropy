@@ -326,10 +326,12 @@ class LigandBindingTrajectoryResult:
 
     def to_dataframe(self) -> pl.DataFrame:
         """Return per-frame results as DataFrame."""
-        return pl.DataFrame({
-            "frame": range(self.n_frames),
-            "negT_dS_kcal": self.per_frame_negT_dS,
-        })
+        return pl.DataFrame(
+            {
+                "frame": range(self.n_frames),
+                "negT_dS_kcal": self.per_frame_negT_dS,
+            }
+        )
 
 
 class BindingEntropyCalculator:
@@ -567,7 +569,8 @@ class BindingEntropyCalculator:
         if protein_residues is None:
             # Auto-detect: exclude ligand and solvent/ions
             protein_residues = [
-                res.index for res in traj_complex.topology.residues
+                res.index
+                for res in traj_complex.topology.residues
                 if res.index not in ligand_set and res.name not in SOLVENT_RESIDUES
             ]
             logger.info(f"Auto-detected {len(protein_residues)} protein residues")
@@ -673,7 +676,8 @@ class BindingEntropyCalculator:
         if protein_residues is None:
             ligand_set = set(ligand_residues)
             protein_residues = [
-                res.index for res in traj.topology.residues
+                res.index
+                for res in traj.topology.residues
                 if res.index not in ligand_set and res.name not in SOLVENT_RESIDUES
             ]
             logger.info(f"Auto-detected {len(protein_residues)} protein residues")

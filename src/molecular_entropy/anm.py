@@ -328,9 +328,7 @@ def build_sparse_hessian_with_ligand(
     all_data = np.concatenate(data_list)
 
     # Build sparse matrix (duplicate entries are summed)
-    hessian = csr_matrix(
-        (all_data, (all_rows, all_cols)), shape=(n_dof, n_dof), dtype=np.float64
-    )
+    hessian = csr_matrix((all_data, (all_rows, all_cols)), shape=(n_dof, n_dof), dtype=np.float64)
 
     return hessian
 
@@ -877,7 +875,11 @@ class ANMEntropyCalculator:
         if len(ca_indices) < 4:
             logger.warning(f"Too few CA atoms ({len(ca_indices)}) for ANM")
             return ANMLigandResult(
-                S_kB=0.0, S_kcal_per_K=0.0, n_modes=0, n_protein_atoms=len(ca_indices), n_ligand_atoms=0
+                S_kB=0.0,
+                S_kcal_per_K=0.0,
+                n_modes=0,
+                n_protein_atoms=len(ca_indices),
+                n_ligand_atoms=0,
             )
 
         # mdtraj uses nm, ANM expects Angstrom
@@ -952,7 +954,11 @@ class ANMEntropyCalculator:
         if len(evals) == 0:
             logger.warning("No valid eigenvalues found")
             return ANMLigandResult(
-                S_kB=0.0, S_kcal_per_K=0.0, n_modes=0, n_protein_atoms=n_protein, n_ligand_atoms=n_ligand
+                S_kB=0.0,
+                S_kcal_per_K=0.0,
+                n_modes=0,
+                n_protein_atoms=n_protein,
+                n_ligand_atoms=n_ligand,
             )
 
         # Calculate entropy
