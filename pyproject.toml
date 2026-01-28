@@ -61,6 +61,11 @@ module-name = 'molecular_entropy._core'
 manifest-path = 'Cargo.toml'
 # Wheel compatibility
 compatibility = 'manylinux2014'
+# Include rotamer library data files
+include = [
+    { path = "src/molecular_entropy/data/*.parquet", format = "sdist" },
+    { path = "src/molecular_entropy/data/*.parquet", format = "wheel" },
+]
 
 [tool.pytest.ini_options]
 addopts = '-q --maxfail=1'

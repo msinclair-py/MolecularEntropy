@@ -179,3 +179,41 @@ class StructureLoader:
                 }
             )
         return residues
+
+    @staticmethod
+    def select_residues(traj: md.Trajectory, residue_indices: list[int]) -> md.Trajectory:
+        """
+        Select specific residues by their indices.
+
+        Args:
+            traj: MDTraj trajectory
+            residue_indices: List of residue indices (0-based)
+
+        Returns:
+            New trajectory containing only the specified residues
+        """
+        residue_set = set(residue_indices)
+        atom_idx = []
+        for res in traj.topology.residues:
+            if res.index in residue_set:
+                atom_idx.extend([a.index for a in res.atoms])
+        return traj.atom_slice(sorted(atom_idx))
+
+    @staticmethod
+    def select_residues_except(traj: md.Trajectory, exclude_indices: list[int]) -> md.Trajectory:
+        """
+        Select all residues except those specified.
+
+        Args:
+            traj: MDTraj trajectory
+            exclude_indices: List of residue indices to exclude (0-based)
+
+        Returns:
+            New trajectory with specified residues removed
+        """
+        exclude_set = set(exclude_indices)
+        atom_idx = []
+        for res in traj.topology.residues:
+            if res.index not in exclude_set:
+                atom_idx.extend([a.index for a in res.atoms])
+        return traj.atom_slice(sorted(atom_idx))

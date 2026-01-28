@@ -15,6 +15,8 @@ __all__ = [
     "RotamerEntropyCalculator",
     "RotamerBindingResult",
     "ResidueRotamerResult",
+    "SingleChainRotamerResult",
+    "SingleResidueRotamerResult",
     "clear_backbone_cache",
 ]
 
@@ -92,6 +94,29 @@ class RotamerBindingResult:
     total_negT_dS_kcal: float  # Sum of -T*dS in kcal/mol
     per_residue: list[ResidueRotamerResult]
     temperature: float
+
+
+@dataclass
+class SingleResidueRotamerResult:
+    """Rotamer entropy for a single residue (no binding partner)."""
+
+    chain_id: str
+    resSeq: int
+    resName: str
+    S_kcal_per_K: float  # Entropy in kcal/mol/K
+    negT_S_kcal: float  # -T*S in kcal/mol
+    n_rotamers: int  # Number of available rotamers
+
+
+@dataclass
+class SingleChainRotamerResult:
+    """Rotamer entropy for a single chain (no binding partner)."""
+
+    total_S_kcal_per_K: float  # Sum of entropy for all residues
+    negT_S_kcal: float  # -T*S in kcal/mol (useful for comparisons)
+    per_residue: list[SingleResidueRotamerResult]
+    temperature: float
+    chain_id: str | None = None
 
 
 class RotamerEntropyCalculator:
@@ -733,6 +758,83 @@ class RotamerEntropyCalculator:
         else:
             return self._calculate_binding_delta_python(traj, chain_a, chain_b)
 
+    def calculate(
+        self,
+        traj: md.Trajectory,
+        chain_id: str | None = None,
+    ) -> SingleChainRotamerResult:
+        """
+        Calculate rotamer entropy for a single chain (no binding partner).
+
+        All rotamers are available since there's no partner to clash with.
+        This gives the maximum conformational entropy for the side chains.
+
+        Args:
+            traj: MDTraj trajectory
+            chain_id: Optional chain ID to filter (if None, uses all residues)
+
+        Returns:
+            SingleChainRotamerResult with per-residue and total entropy
+        """
+        if self.rotlib_index is None:
+            raise RuntimeError("Rotamer library not loaded")
+
+        # Compute backbone bins
+        backbone_bins = self.compute_backbone_bins(traj)
+
+        results = []
+
+        for res in traj.topology.residues:
+            if res.name not in CHI_RESIDUES:
+                continue
+
+            # Filter by chain if specified
+            if chain_id is not None and res.chain.chain_id != chain_id:
+                continue
+
+            phi_bin, psi_bin = backbone_bins.get(res.index, (None, None))
+            if phi_bin is None or psi_bin is None:
+                continue
+
+            key = (res.name, phi_bin, psi_bin)
+            rotamers = self.rotlib_index.get(key)
+            if not rotamers:
+                continue
+
+            # Calculate entropy with all rotamers available
+            probs = np.array([r["p"] for r in rotamers])
+            S = self.compute_entropy_from_probs(probs)
+            negT_S = -self.temperature * S
+
+            results.append(
+                SingleResidueRotamerResult(
+                    chain_id=res.chain.chain_id,
+                    resSeq=res.resSeq,
+                    resName=res.name,
+                    S_kcal_per_K=S,
+                    negT_S_kcal=negT_S,
+                    n_rotamers=len(probs),
+                )
+            )
+
+        # Sum up contributions
+        total_S = sum(r.S_kcal_per_K for r in results)
+        total_negT_S = -self.temperature * total_S
+
+        logger.info(
+            f"Single-chain rotamer entropy: {len(results)} residues, "
+            f"total S = {total_S:.4f} kcal/mol/K, "
+            f"-T*S = {total_negT_S:.3f} kcal/mol"
+        )
+
+        return SingleChainRotamerResult(
+            total_S_kcal_per_K=total_S,
+            negT_S_kcal=total_negT_S,
+            per_residue=results,
+            temperature=self.temperature,
+            chain_id=chain_id,
+        )
+
     def to_dataframe(self, result: RotamerBindingResult) -> pl.DataFrame:
         """
         Convert results to a polars DataFrame.
@@ -756,6 +858,34 @@ class RotamerEntropyCalculator:
                     "negT_dS_kcal": r.negT_dS_kcal,
                     "n_rotamers_unbound": r.n_rotamers_unbound,
                     "n_rotamers_bound": r.n_rotamers_bound,
+                }
+            )
+
+        df = pl.DataFrame(rows)
+        if len(df) > 0:
+            df = df.sort(["chain_id", "resSeq"])
+        return df
+
+    def single_chain_to_dataframe(self, result: SingleChainRotamerResult) -> pl.DataFrame:
+        """
+        Convert single-chain results to a polars DataFrame.
+
+        Args:
+            result: SingleChainRotamerResult
+
+        Returns:
+            DataFrame with per-residue entropy data
+        """
+        rows = []
+        for r in result.per_residue:
+            rows.append(
+                {
+                    "chain_id": r.chain_id,
+                    "resSeq": r.resSeq,
+                    "resName": r.resName,
+                    "S_kcal_per_K": r.S_kcal_per_K,
+                    "negT_S_kcal": r.negT_S_kcal,
+                    "n_rotamers": r.n_rotamers,
                 }
             )
 

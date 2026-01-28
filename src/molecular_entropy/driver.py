@@ -12,19 +12,24 @@ Performance optimizations:
 __all__ = [
     "BindingEntropyCalculator",
     "BindingEntropyResult",
+    "SingleChainEntropyResult",
+    "LigandBindingEntropyResult",
+    "LigandBindingTrajectoryResult",
     "main",
 ]
 
 import json
 import logging
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import mdtraj as md
+import numpy as np
 import polars as pl
 
-from .anm import ANMBindingResult, ANMEntropyCalculator
+from .anm import ANMBindingResult, ANMEntropyCalculator, ANMEntropyResult, ANMLigandResult
 from .constants import (
     DEFAULT_ALPHA_NP,
     DEFAULT_ANM_CUTOFF,
@@ -33,9 +38,10 @@ from .constants import (
     DEFAULT_PROBE_RADIUS,
     DEFAULT_TEMPERATURE,
     DEFAULT_TR_PENALTY,
+    SOLVENT_RESIDUES,
 )
-from .rotamer import RotamerBindingResult, RotamerEntropyCalculator
-from .sasa import SASABindingResult, SASACalculator
+from .rotamer import RotamerBindingResult, RotamerEntropyCalculator, SingleChainRotamerResult
+from .sasa import SASABindingResult, SASACalculator, SASAResult
 from .structure import StructureLoader
 
 logger = logging.getLogger(__name__)
@@ -125,6 +131,207 @@ class BindingEntropyResult:
         return result
 
 
+@dataclass
+class SingleChainEntropyResult:
+    """Complete single-chain entropy calculation result."""
+
+    sasa: SASAResult | None
+    anm: ANMEntropyResult | None
+    rotamer: SingleChainRotamerResult | None
+    temperature: float
+    chain_id: str | None
+
+    @property
+    def S_sasa(self) -> float:
+        """SASA entropy contribution (S) in kcal/mol/K."""
+        # Note: For single chain, this is absolute SASA, not a delta
+        # Entropy conversion would need empirical coefficients
+        return 0.0  # Not directly comparable
+
+    @property
+    def S_vib_kcal_per_K(self) -> float:
+        """Vibrational entropy (S) in kcal/mol/K."""
+        return self.anm.S_kcal_per_K if self.anm else 0.0
+
+    @property
+    def S_rotamer_kcal_per_K(self) -> float:
+        """Rotamer entropy (S) in kcal/mol/K."""
+        return self.rotamer.total_S_kcal_per_K if self.rotamer else 0.0
+
+    @property
+    def total_S_kcal_per_K(self) -> float:
+        """Total entropy (S) in kcal/mol/K (vibrational + rotamer)."""
+        return self.S_vib_kcal_per_K + self.S_rotamer_kcal_per_K
+
+    @property
+    def negT_S_vib(self) -> float:
+        """-T*S vibrational in kcal/mol."""
+        return -self.temperature * self.S_vib_kcal_per_K
+
+    @property
+    def negT_S_rotamer(self) -> float:
+        """-T*S rotamer in kcal/mol."""
+        return self.rotamer.negT_S_kcal if self.rotamer else 0.0
+
+    @property
+    def total_negT_S(self) -> float:
+        """Total -T*S in kcal/mol."""
+        return self.negT_S_vib + self.negT_S_rotamer
+
+    def to_dataframe(self) -> pl.DataFrame:
+        """Convert summary to DataFrame."""
+        rows = [
+            {"term": "-T*S_vibrational", "value_kcal": self.negT_S_vib},
+            {"term": "-T*S_sidechain", "value_kcal": self.negT_S_rotamer},
+            {"term": "TOTAL -T*S", "value_kcal": self.total_negT_S},
+        ]
+        if self.sasa:
+            rows.insert(0, {"term": "SASA_total_A2", "value_kcal": self.sasa.total})
+        return pl.DataFrame(rows)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "temperature_K": self.temperature,
+            "chain_id": self.chain_id,
+            "terms": {
+                "negT_S_vibrational_kcal": self.negT_S_vib,
+                "negT_S_sidechain_kcal": self.negT_S_rotamer,
+                "total_negT_S_kcal": self.total_negT_S,
+            },
+        }
+
+        if self.sasa:
+            result["sasa"] = {
+                "total_A2": self.sasa.total,
+                "polar_A2": self.sasa.polar,
+                "nonpolar_A2": self.sasa.nonpolar,
+            }
+
+        if self.anm:
+            result["anm"] = {
+                "S_kB": self.anm.S_kB,
+                "n_modes": self.anm.n_modes,
+            }
+
+        if self.rotamer:
+            result["rotamer"] = {
+                "n_residues": len(self.rotamer.per_residue),
+                "total_S_kcal_per_K": self.rotamer.total_S_kcal_per_K,
+            }
+
+        return result
+
+
+@dataclass
+class LigandBindingEntropyResult:
+    """Entropy change upon protein-small molecule binding."""
+
+    # Complex state (protein + ligand)
+    complex_sasa: SASAResult | None
+    complex_anm: ANMLigandResult | None
+
+    # Protein alone
+    protein_alone_sasa: SASAResult | None
+    protein_alone_anm: ANMEntropyResult | None
+    protein_alone_rotamer: SingleChainRotamerResult | None
+
+    # Protein in complex (for rotamer with ligand clashes)
+    protein_complex_rotamer: SingleChainRotamerResult | None
+
+    temperature: float
+    ligand_residues: list[int] | None = None
+
+    @property
+    def delta_sasa_total(self) -> float:
+        """Change in total SASA upon binding (A^2)."""
+        if self.complex_sasa and self.protein_alone_sasa:
+            # For protein-ligand: delta = protein_alone - complex_protein_portion
+            # This is approximate since we don't separate protein SASA in complex
+            return self.protein_alone_sasa.total - self.complex_sasa.total
+        return 0.0
+
+    @property
+    def dS_vib_kcal_per_K(self) -> float:
+        """Vibrational entropy change (dS) in kcal/mol/K."""
+        if self.complex_anm and self.protein_alone_anm:
+            return self.complex_anm.S_kcal_per_K - self.protein_alone_anm.S_kcal_per_K
+        return 0.0
+
+    @property
+    def dS_rotamer_kcal_per_K(self) -> float:
+        """Rotamer entropy change (dS) in kcal/mol/K."""
+        if self.protein_complex_rotamer and self.protein_alone_rotamer:
+            return (
+                self.protein_complex_rotamer.total_S_kcal_per_K
+                - self.protein_alone_rotamer.total_S_kcal_per_K
+            )
+        return 0.0
+
+    @property
+    def negT_dS_vib(self) -> float:
+        """-T*dS vibrational in kcal/mol."""
+        return -self.temperature * self.dS_vib_kcal_per_K
+
+    @property
+    def negT_dS_rotamer(self) -> float:
+        """-T*dS rotamer in kcal/mol."""
+        return -self.temperature * self.dS_rotamer_kcal_per_K
+
+    @property
+    def total_negT_dS(self) -> float:
+        """Total -T*dS in kcal/mol (excludes translational/rotational)."""
+        return self.negT_dS_vib + self.negT_dS_rotamer
+
+    def to_dataframe(self) -> pl.DataFrame:
+        """Convert summary to DataFrame."""
+        rows = [
+            {"term": "-T*dS_vibrational", "value_kcal": self.negT_dS_vib},
+            {"term": "-T*dS_sidechain", "value_kcal": self.negT_dS_rotamer},
+            {"term": "TOTAL -T*dS", "value_kcal": self.total_negT_dS},
+        ]
+        return pl.DataFrame(rows)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        result = {
+            "temperature_K": self.temperature,
+            "ligand_residues": self.ligand_residues,
+            "terms": {
+                "negT_dS_vibrational_kcal": self.negT_dS_vib,
+                "negT_dS_sidechain_kcal": self.negT_dS_rotamer,
+                "total_negT_dS_kcal": self.total_negT_dS,
+            },
+        }
+
+        if self.complex_anm:
+            result["complex_anm"] = {
+                "n_protein_atoms": self.complex_anm.n_protein_atoms,
+                "n_ligand_atoms": self.complex_anm.n_ligand_atoms,
+                "n_modes": self.complex_anm.n_modes,
+            }
+
+        return result
+
+
+@dataclass
+class LigandBindingTrajectoryResult:
+    """Trajectory statistics for protein-ligand binding entropy."""
+
+    mean_negT_dS: float
+    std_negT_dS: float
+    n_frames: int
+    per_frame_negT_dS: list[float] = field(repr=False)
+    temperature: float = 298.15
+
+    def to_dataframe(self) -> pl.DataFrame:
+        """Return per-frame results as DataFrame."""
+        return pl.DataFrame({
+            "frame": range(self.n_frames),
+            "negT_dS_kcal": self.per_frame_negT_dS,
+        })
+
+
 class BindingEntropyCalculator:
     """
     Facade for complete binding entropy calculations.
@@ -136,9 +343,7 @@ class BindingEntropyCalculator:
     - Translational/rotational entropy penalty
 
     Example:
-        calc = BindingEntropyCalculator(
-            rotlib_path="rotamer_library/simple_library.parquet"
-        )
+        calc = BindingEntropyCalculator(rotamer_library="simple")
         result = calc.calculate("complex.pdb", chain_a="A", chain_b="B")
         print(result.total_negT_dS)
     """
@@ -155,6 +360,7 @@ class BindingEntropyCalculator:
         anm_cutoff: float = DEFAULT_ANM_CUTOFF,
         anm_gamma: float = DEFAULT_ANM_GAMMA,
         # Rotamer options
+        rotamer_library: str | None = None,
         rotlib_path: str | Path | None = None,
         # Component flags
         compute_sasa: bool = True,
@@ -172,11 +378,14 @@ class BindingEntropyCalculator:
             beta_pol: SASA coefficient for polar surface (kcal/mol/A^2)
             anm_cutoff: Distance cutoff for ANM springs (Angstrom)
             anm_gamma: ANM spring constant
-            rotlib_path: Path to Dunbrack rotamer library
+            rotamer_library: Name of bundled library ("simple" or "extended")
+            rotlib_path: Path to Dunbrack rotamer library (alternative to rotamer_library)
             compute_sasa: Whether to compute SASA entropy
             compute_anm: Whether to compute ANM entropy
             compute_rotamer: Whether to compute rotamer entropy
         """
+        from . import get_rotamer_library
+
         self.temperature = temperature
         self.trans_rot_penalty = trans_rot_penalty
 
@@ -204,9 +413,14 @@ class BindingEntropyCalculator:
         else:
             self.anm_calc = None
 
-        if compute_rotamer and rotlib_path:
+        # Resolve rotamer library path
+        resolved_path = rotlib_path
+        if rotamer_library is not None:
+            resolved_path = get_rotamer_library(rotamer_library)
+
+        if compute_rotamer and resolved_path:
             self.rotamer_calc = RotamerEntropyCalculator(
-                rotlib_path=rotlib_path,
+                rotlib_path=resolved_path,
                 temperature=temperature,
             )
         else:
@@ -246,6 +460,252 @@ class BindingEntropyCalculator:
         else:
             # Sequential calculation
             return self._calculate_sequential(traj, chain_a, chain_b, frame)
+
+    def calculate_chain(
+        self,
+        pdb_path: str | Path,
+        chain_id: str | None = None,
+        frame: int = 0,
+    ) -> SingleChainEntropyResult:
+        """
+        Calculate entropy for a single protein chain.
+
+        Useful for:
+        - Protein-small molecule systems (ligand has no CA atoms/rotamers)
+        - Comparing entropy of isolated vs bound protein
+
+        Args:
+            pdb_path: Path to PDB file
+            chain_id: Chain ID to analyze (if None, uses all chains)
+            frame: Frame index to use
+
+        Returns:
+            SingleChainEntropyResult with entropy components
+        """
+        pdb_path = Path(pdb_path)
+        logger.info(f"Calculating single-chain entropy for {pdb_path}")
+        logger.info(f"Chain: {chain_id or 'all'}, T = {self.temperature} K")
+
+        # Load structure
+        traj = StructureLoader.load(pdb_path)
+
+        # If chain_id specified, select that chain
+        if chain_id:
+            traj = StructureLoader.select_chain(traj, chain_id)
+
+        # SASA
+        sasa_result = None
+        if self.sasa_calc:
+            logger.info("Computing SASA...")
+            sasa_result = self.sasa_calc.calculate(traj, frame)
+
+        # ANM vibrational entropy
+        anm_result = None
+        if self.anm_calc:
+            logger.info("Computing ANM vibrational entropy...")
+            anm_result = self.anm_calc.calculate(traj)
+
+        # Rotamer entropy
+        rotamer_result = None
+        if self.rotamer_calc:
+            logger.info("Computing rotamer entropy...")
+            rotamer_result = self.rotamer_calc.calculate(traj, chain_id=None)
+
+        result = SingleChainEntropyResult(
+            sasa=sasa_result,
+            anm=anm_result,
+            rotamer=rotamer_result,
+            temperature=self.temperature,
+            chain_id=chain_id,
+        )
+
+        logger.info(f"Total -T*S = {result.total_negT_S:.3f} kcal/mol")
+
+        return result
+
+    def calculate_ligand_binding(
+        self,
+        pdb_path: str | Path,
+        ligand_residues: list[int],
+        protein_residues: list[int] | None = None,
+        ligand_bonds: list[tuple[int, int]] | None = None,
+        frame: int = 0,
+    ) -> LigandBindingEntropyResult:
+        """
+        Calculate entropy change upon small molecule binding.
+
+        Computes:
+        - Protein entropy in complex (with ligand present for SASA/clash detection)
+        - Protein entropy alone
+        - Delta entropy
+
+        Args:
+            pdb_path: Path to PDB file of the protein-ligand complex
+            ligand_residues: List of residue indices (0-based) that comprise the ligand.
+            protein_residues: Optional list of residue indices for the protein.
+                             If None, automatically detected by excluding ligand
+                             and common solvent/ion residues (WAT, HOH, NA, CL, etc.)
+            ligand_bonds: Optional list of (atom_idx, atom_idx) tuples defining
+                         ligand internal connectivity for ANM. Indices are relative
+                         to the ligand atoms. If None, bonds will be inferred from distances.
+            frame: Frame index to use
+
+        Returns:
+            LigandBindingEntropyResult with entropy changes
+        """
+        pdb_path = Path(pdb_path)
+        logger.info(f"Calculating ligand binding entropy for {pdb_path}")
+        logger.info(f"Ligand residues: {ligand_residues}")
+
+        # Load full complex
+        traj_complex = StructureLoader.load(pdb_path)
+
+        ligand_residues = list(ligand_residues)
+        ligand_set = set(ligand_residues)
+
+        # Determine protein residue indices
+        if protein_residues is None:
+            # Auto-detect: exclude ligand and solvent/ions
+            protein_residues = [
+                res.index for res in traj_complex.topology.residues
+                if res.index not in ligand_set and res.name not in SOLVENT_RESIDUES
+            ]
+            logger.info(f"Auto-detected {len(protein_residues)} protein residues")
+        else:
+            protein_residues = list(protein_residues)
+
+        # Get protein-only trajectory
+        traj_protein = StructureLoader.select_residues(traj_complex, protein_residues)
+
+        # Get protein+ligand trajectory (excluding solvent for SASA/ANM)
+        complex_residues = protein_residues + ligand_residues
+        traj_protein_ligand = StructureLoader.select_residues(traj_complex, complex_residues)
+
+        # Map original residue indices to new indices in sliced trajectory
+        old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(complex_residues)}
+        new_ligand_indices = [old_to_new[i] for i in ligand_residues]
+        new_protein_indices = [old_to_new[i] for i in protein_residues]
+
+        # Complex SASA (protein + ligand, no solvent)
+        complex_sasa = None
+        if self.sasa_calc:
+            logger.info("Computing complex SASA...")
+            complex_sasa = self.sasa_calc.calculate(traj_protein_ligand, frame)
+
+        # Complex ANM with ligand
+        complex_anm = None
+        if self.anm_calc:
+            logger.info("Computing complex ANM (with ligand)...")
+            complex_anm = self.anm_calc.calculate_with_ligand(
+                traj_protein_ligand,
+                ligand_residue_indices=new_ligand_indices,
+                protein_residue_indices=new_protein_indices,
+                ligand_bonds=ligand_bonds,
+            )
+
+        # Protein alone SASA
+        protein_alone_sasa = None
+        if self.sasa_calc:
+            logger.info("Computing protein-alone SASA...")
+            protein_alone_sasa = self.sasa_calc.calculate(traj_protein, frame)
+
+        # Protein alone ANM
+        protein_alone_anm = None
+        if self.anm_calc:
+            logger.info("Computing protein-alone ANM...")
+            protein_alone_anm = self.anm_calc.calculate(traj_protein)
+
+        # Protein alone rotamer entropy (all rotamers available)
+        protein_alone_rotamer = None
+        if self.rotamer_calc:
+            logger.info("Computing protein-alone rotamer entropy...")
+            protein_alone_rotamer = self.rotamer_calc.calculate(traj_protein)
+
+        # Protein in complex rotamer entropy
+        # For now, treat as same as alone (no clash detection with small molecule)
+        # A more sophisticated approach would check rotamer clashes with ligand
+        protein_complex_rotamer = protein_alone_rotamer
+
+        result = LigandBindingEntropyResult(
+            complex_sasa=complex_sasa,
+            complex_anm=complex_anm,
+            protein_alone_sasa=protein_alone_sasa,
+            protein_alone_anm=protein_alone_anm,
+            protein_alone_rotamer=protein_alone_rotamer,
+            protein_complex_rotamer=protein_complex_rotamer,
+            temperature=self.temperature,
+            ligand_residues=ligand_residues,
+        )
+
+        logger.info(f"Total -T*dS = {result.total_negT_dS:.3f} kcal/mol")
+
+        return result
+
+    def calculate_ligand_binding_trajectory(
+        self,
+        traj_path: str | Path,
+        topology_path: str | Path,
+        ligand_residues: list[int],
+        protein_residues: list[int] | None = None,
+        ligand_bonds: list[tuple[int, int]] | None = None,
+        frames: list[int] | None = None,
+    ) -> LigandBindingTrajectoryResult:
+        """
+        Calculate ligand binding entropy statistics across a trajectory.
+
+        Args:
+            traj_path: Path to trajectory file (DCD, XTC, etc.)
+            topology_path: Path to topology file (PDB or prmtop)
+            ligand_residues: List of residue indices (0-based) that comprise the ligand
+            protein_residues: Optional list of residue indices for the protein.
+                             If None, automatically detected by excluding ligand
+                             and common solvent/ion residues.
+            ligand_bonds: Optional ligand bond connectivity for ANM
+            frames: List of frame indices to analyze (default: all frames)
+
+        Returns:
+            LigandBindingTrajectoryResult with mean, std, and per-frame values
+        """
+        logger.info(f"Loading trajectory from {traj_path}")
+        traj = StructureLoader.load(traj_path, topology=topology_path)
+
+        # Auto-detect protein residues from first frame if not provided
+        if protein_residues is None:
+            ligand_set = set(ligand_residues)
+            protein_residues = [
+                res.index for res in traj.topology.residues
+                if res.index not in ligand_set and res.name not in SOLVENT_RESIDUES
+            ]
+            logger.info(f"Auto-detected {len(protein_residues)} protein residues")
+
+        if frames is None:
+            frames = list(range(traj.n_frames))
+
+        dS_values = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame_pdb = Path(tmpdir) / "frame.pdb"
+
+            for i, frame_idx in enumerate(frames):
+                logger.info(f"Processing frame {frame_idx} ({i + 1}/{len(frames)})")
+                traj[frame_idx].save_pdb(str(frame_pdb))
+
+                result = self.calculate_ligand_binding(
+                    pdb_path=frame_pdb,
+                    ligand_residues=ligand_residues,
+                    protein_residues=protein_residues,
+                    ligand_bonds=ligand_bonds,
+                )
+                dS_values.append(result.total_negT_dS)
+
+        dS_array = np.array(dS_values)
+
+        return LigandBindingTrajectoryResult(
+            mean_negT_dS=float(dS_array.mean()),
+            std_negT_dS=float(dS_array.std()),
+            n_frames=len(frames),
+            per_frame_negT_dS=dS_values,
+            temperature=self.temperature,
+        )
 
     def _calculate_sequential(
         self,

@@ -3,21 +3,22 @@ Example of analyzing a molecular dynamics trajectory.
 
 Calculates binding entropy for multiple frames to assess
 conformational sampling and entropy fluctuations.
+
+Uses AMBER topology (prmtop) with DCD trajectory format.
 """
 
 from molecular_entropy import BindingEntropyCalculator
 import polars as pl
 
 # Initialize calculator
-calc = BindingEntropyCalculator(
-    rotlib_path="rotamer_library/simple_library.parquet"
-)
+calc = BindingEntropyCalculator(rotamer_library="simple")
 
 # Analyze trajectory
-# Supports common formats: DCD, XTC, TRR, etc.
+# Topology: AMBER prmtop format
+# Trajectory: DCD format (also supports XTC, TRR, etc.)
 results = calc.calculate_from_trajectory(
     traj_path="data/dynamic.dcd",
-    topology_path="data/dynamic.pdb",
+    topology_path="data/dynamic.prmtop",
     chain_a="A",
     chain_b="B",
     # Optional: analyze specific frames (default: all frames)

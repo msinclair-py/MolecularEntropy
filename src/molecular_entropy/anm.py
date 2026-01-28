@@ -14,7 +14,9 @@ __all__ = [
     "ANMEntropyCalculator",
     "ANMEntropyResult",
     "ANMBindingResult",
+    "ANMLigandResult",
     "build_sparse_hessian",
+    "build_sparse_hessian_with_ligand",
     "compute_anm_eigenvalues_sparse",
 ]
 
@@ -150,6 +152,189 @@ def build_sparse_hessian(
     return hessian + diag_matrix
 
 
+def build_sparse_hessian_with_ligand(
+    ca_coords: np.ndarray,
+    ligand_coords: np.ndarray,
+    ligand_bonds: list[tuple[int, int]],
+    cutoff: float,
+    gamma_protein: float = 1.0,
+    gamma_ligand_bond: float = 10.0,
+    gamma_interface: float = 1.0,
+) -> csr_matrix:
+    """
+    Build ANM Hessian matrix including ligand atoms with explicit bond connectivity.
+
+    The Hessian includes:
+    1. Protein CA-CA springs (distance cutoff, gamma_protein)
+    2. Ligand internal bonds (explicit connectivity, gamma_ligand_bond)
+    3. Protein-ligand interface springs (distance cutoff, gamma_interface)
+
+    This allows the ligand to contribute vibrational modes while respecting
+    its covalent bond geometry.
+
+    Args:
+        ca_coords: Nx3 array of protein C-alpha coordinates (Angstrom)
+        ligand_coords: Mx3 array of ligand atom coordinates (Angstrom)
+        ligand_bonds: List of (local_atom_i, local_atom_j) tuples defining ligand bonds.
+                     Indices are 0-based relative to ligand_coords.
+        cutoff: Distance cutoff for non-bonded springs (Angstrom)
+        gamma_protein: Spring constant for protein CA-CA interactions
+        gamma_ligand_bond: Spring constant for ligand covalent bonds (stiffer)
+        gamma_interface: Spring constant for protein-ligand interface springs
+
+    Returns:
+        Sparse CSR Hessian matrix ((3*(N+M)) x (3*(N+M)))
+    """
+    n_protein = len(ca_coords)
+    n_ligand = len(ligand_coords)
+    n_total = n_protein + n_ligand
+    n_dof = 3 * n_total
+
+    # Combine all coordinates
+    all_coords = np.vstack([ca_coords, ligand_coords])
+
+    # Build protein-protein Hessian using existing function
+    # This handles protein CA-CA interactions efficiently
+    protein_hessian = build_sparse_hessian(ca_coords, cutoff, gamma_protein)
+
+    # Embed protein Hessian in larger matrix
+    # We'll build the full matrix and add contributions
+
+    # Initialize data structures for COO format
+    rows_list = []
+    cols_list = []
+    data_list = []
+
+    # Copy protein Hessian entries
+    protein_coo = protein_hessian.tocoo()
+    rows_list.append(protein_coo.row)
+    cols_list.append(protein_coo.col)
+    data_list.append(protein_coo.data)
+
+    # Helper function to add a spring between two atoms
+    def add_spring(atom_i: int, atom_j: int, gamma: float, coords: np.ndarray):
+        """Add a spring contribution to the Hessian."""
+        r_ij = coords[atom_j] - coords[atom_i]
+        dist_sq = np.sum(r_ij * r_ij)
+        if dist_sq < 1e-10:
+            return [], [], []
+
+        # Off-diagonal block: H[i,j] = -gamma * (r_ij ⊗ r_ij) / |r_ij|²
+        block = -gamma * np.outer(r_ij, r_ij) / dist_sq
+
+        rows = []
+        cols = []
+        data = []
+
+        # Off-diagonal block (i, j)
+        for di in range(3):
+            for dj in range(3):
+                rows.append(3 * atom_i + di)
+                cols.append(3 * atom_j + dj)
+                data.append(block[di, dj])
+                # Symmetric (j, i)
+                rows.append(3 * atom_j + di)
+                cols.append(3 * atom_i + dj)
+                data.append(block[di, dj])
+
+        return rows, cols, data
+
+    # Add ligand internal bonds (covalent bonds with stiffer springs)
+    ligand_diag = np.zeros((n_ligand, 3, 3), dtype=np.float64)
+
+    for local_i, local_j in ligand_bonds:
+        # Convert to global indices
+        global_i = n_protein + local_i
+        global_j = n_protein + local_j
+
+        r_ij = all_coords[global_j] - all_coords[global_i]
+        dist_sq = np.sum(r_ij * r_ij)
+        if dist_sq < 1e-10:
+            continue
+
+        block = -gamma_ligand_bond * np.outer(r_ij, r_ij) / dist_sq
+
+        # Add off-diagonal entries
+        for di in range(3):
+            for dj in range(3):
+                rows_list.append(np.array([3 * global_i + di]))
+                cols_list.append(np.array([3 * global_j + dj]))
+                data_list.append(np.array([block[di, dj]]))
+                rows_list.append(np.array([3 * global_j + di]))
+                cols_list.append(np.array([3 * global_i + dj]))
+                data_list.append(np.array([block[di, dj]]))
+
+        # Accumulate diagonal contributions
+        ligand_diag[local_i] -= block
+        ligand_diag[local_j] -= block
+
+    # Add protein-ligand interface springs (based on distance cutoff)
+    protein_tree = cKDTree(ca_coords)
+    ligand_tree = cKDTree(ligand_coords)
+
+    # Find protein-ligand contacts
+    contacts = protein_tree.query_ball_tree(ligand_tree, r=cutoff)
+
+    for protein_idx, ligand_indices in enumerate(contacts):
+        for ligand_local_idx in ligand_indices:
+            global_ligand_idx = n_protein + ligand_local_idx
+
+            r_ij = all_coords[global_ligand_idx] - all_coords[protein_idx]
+            dist_sq = np.sum(r_ij * r_ij)
+            if dist_sq < 1e-10:
+                continue
+
+            block = -gamma_interface * np.outer(r_ij, r_ij) / dist_sq
+
+            # Add off-diagonal entries
+            for di in range(3):
+                for dj in range(3):
+                    rows_list.append(np.array([3 * protein_idx + di]))
+                    cols_list.append(np.array([3 * global_ligand_idx + dj]))
+                    data_list.append(np.array([block[di, dj]]))
+                    rows_list.append(np.array([3 * global_ligand_idx + di]))
+                    cols_list.append(np.array([3 * protein_idx + dj]))
+                    data_list.append(np.array([block[di, dj]]))
+
+            # Accumulate diagonal contributions for ligand
+            ligand_diag[ligand_local_idx] -= block
+
+            # Need to add to protein diagonal too - but protein_hessian already
+            # has its internal diagonal. We need to add interface contributions.
+            # Build sparse update for protein diagonal
+            for di in range(3):
+                for dj in range(3):
+                    rows_list.append(np.array([3 * protein_idx + di]))
+                    cols_list.append(np.array([3 * protein_idx + dj]))
+                    data_list.append(np.array([-block[di, dj]]))
+
+    # Add ligand diagonal blocks
+    local_i = np.array([0, 0, 0, 1, 1, 1, 2, 2, 2], dtype=np.int64)
+    local_j = np.array([0, 1, 2, 0, 1, 2, 0, 1, 2], dtype=np.int64)
+
+    for ligand_local_idx in range(n_ligand):
+        global_idx = n_protein + ligand_local_idx
+        diag_block = ligand_diag[ligand_local_idx]
+
+        diag_row = 3 * global_idx + local_i
+        diag_col = 3 * global_idx + local_j
+        rows_list.append(diag_row)
+        cols_list.append(diag_col)
+        data_list.append(diag_block.ravel())
+
+    # Combine all entries
+    all_rows = np.concatenate(rows_list)
+    all_cols = np.concatenate(cols_list)
+    all_data = np.concatenate(data_list)
+
+    # Build sparse matrix (duplicate entries are summed)
+    hessian = csr_matrix(
+        (all_data, (all_rows, all_cols)), shape=(n_dof, n_dof), dtype=np.float64
+    )
+
+    return hessian
+
+
 def compute_anm_eigenvalues_sparse(
     coords: np.ndarray,
     cutoff: float,
@@ -228,6 +413,17 @@ class ANMBindingResult:
     complex_result: ANMEntropyResult
     chain_a_result: ANMEntropyResult
     chain_b_result: ANMEntropyResult
+
+
+@dataclass
+class ANMLigandResult:
+    """Results from ANM calculation with ligand atoms included."""
+
+    S_kB: float  # Entropy in k_B units
+    S_kcal_per_K: float  # Entropy in kcal/mol/K
+    n_modes: int  # Number of non-trivial modes used
+    n_protein_atoms: int  # Number of protein CA atoms
+    n_ligand_atoms: int  # Number of ligand atoms
 
 
 class ANMEntropyCalculator:
@@ -629,3 +825,177 @@ class ANMEntropyCalculator:
             chain_a_result=chain_a_result,
             chain_b_result=chain_b_result,
         )
+
+    def calculate_with_ligand(
+        self,
+        traj: md.Trajectory,
+        ligand_residue_indices: list[int],
+        protein_residue_indices: list[int] | None = None,
+        ligand_bonds: list[tuple[int, int]] | None = None,
+        gamma_ligand_bond: float = 10.0,
+        gamma_interface: float = 1.0,
+    ) -> ANMLigandResult:
+        """
+        Calculate vibrational entropy including ligand atoms.
+
+        Builds an elastic network that includes:
+        - Protein CA atoms with distance-based springs
+        - Ligand atoms with explicit bond connectivity
+        - Protein-ligand interface springs
+
+        Args:
+            traj: MDTraj trajectory
+            ligand_residue_indices: List of residue indices (0-based) that comprise
+                                   the ligand.
+            protein_residue_indices: List of residue indices for the protein.
+                                    If None, uses all non-ligand residues (may include solvent).
+            ligand_bonds: List of (atom_i, atom_j) tuples defining ligand bonds.
+                         Indices are relative to the ligand atoms in the trajectory.
+                         If None, will attempt to infer bonds from distances.
+            gamma_ligand_bond: Spring constant for ligand covalent bonds
+            gamma_interface: Spring constant for protein-ligand interface
+
+        Returns:
+            ANMLigandResult with entropy including ligand contribution
+        """
+        ligand_res_set = set(ligand_residue_indices) if ligand_residue_indices else set()
+        protein_res_set = set(protein_residue_indices) if protein_residue_indices else None
+
+        # Extract protein CA coordinates
+        ca_indices = []
+        for atom in traj.topology.atoms:
+            if atom.name == "CA":
+                if protein_res_set is not None:
+                    # Use explicit protein residue list
+                    if atom.residue.index in protein_res_set:
+                        ca_indices.append(atom.index)
+                else:
+                    # Fallback: exclude ligand residues
+                    if atom.residue.index not in ligand_res_set:
+                        ca_indices.append(atom.index)
+
+        if len(ca_indices) < 4:
+            logger.warning(f"Too few CA atoms ({len(ca_indices)}) for ANM")
+            return ANMLigandResult(
+                S_kB=0.0, S_kcal_per_K=0.0, n_modes=0, n_protein_atoms=len(ca_indices), n_ligand_atoms=0
+            )
+
+        # mdtraj uses nm, ANM expects Angstrom
+        ca_coords = np.ascontiguousarray(traj.xyz[0, ca_indices] * 10.0, dtype=np.float64)
+
+        # Extract ligand atom coordinates
+        ligand_atom_indices = []
+        if ligand_residue_indices:
+            for atom in traj.topology.atoms:
+                if atom.residue.index in ligand_res_set:
+                    ligand_atom_indices.append(atom.index)
+
+        if not ligand_atom_indices:
+            # No ligand found, fall back to protein-only ANM
+            logger.info("No ligand atoms found, computing protein-only ANM")
+            result = self._compute_entropy_sparse(ca_coords)
+            return ANMLigandResult(
+                S_kB=result.S_kB,
+                S_kcal_per_K=result.S_kcal_per_K,
+                n_modes=result.n_modes,
+                n_protein_atoms=len(ca_indices),
+                n_ligand_atoms=0,
+            )
+
+        ligand_coords = np.ascontiguousarray(
+            traj.xyz[0, ligand_atom_indices] * 10.0, dtype=np.float64
+        )
+
+        # Handle ligand bonds
+        if ligand_bonds is None:
+            # Infer bonds from distances (simple heuristic: bond if < 2.0 Angstrom)
+            ligand_bonds = self._infer_ligand_bonds(ligand_coords)
+            logger.info(f"Inferred {len(ligand_bonds)} ligand bonds from distances")
+
+        # Build Hessian with ligand
+        n_protein = len(ca_coords)
+        n_ligand = len(ligand_coords)
+        n_total = n_protein + n_ligand
+        n_dof = 3 * n_total
+
+        hessian = build_sparse_hessian_with_ligand(
+            ca_coords,
+            ligand_coords,
+            ligand_bonds,
+            self.cutoff,
+            self.gamma,
+            gamma_ligand_bond,
+            gamma_interface,
+        )
+
+        # Compute eigenvalues
+        k = min(6 + self.n_modes + 6, n_dof - 1)
+
+        try:
+            eigenvalues, _ = eigsh(
+                hessian,
+                k=k,
+                sigma=1e-4,
+                which="LM",
+                tol=1e-5,
+                maxiter=500,
+            )
+        except Exception as e:
+            logger.warning(f"Sparse eigensolver failed: {e}, falling back to dense")
+            eigenvalues = np.linalg.eigvalsh(hessian.toarray())
+
+        # Sort and filter trivial modes
+        eigenvalues = np.sort(np.abs(eigenvalues))
+        non_trivial = eigenvalues[eigenvalues > 1e-6]
+        evals = non_trivial[: self.n_modes]
+
+        if len(evals) == 0:
+            logger.warning("No valid eigenvalues found")
+            return ANMLigandResult(
+                S_kB=0.0, S_kcal_per_K=0.0, n_modes=0, n_protein_atoms=n_protein, n_ligand_atoms=n_ligand
+            )
+
+        # Calculate entropy
+        S_kB = float(np.sum(-0.5 * np.log(evals)))
+        S_kcal_per_K = S_kB * KB_KCAL
+
+        logger.info(
+            f"ANM with ligand: {n_protein} CA + {n_ligand} ligand atoms, "
+            f"{len(evals)} modes, S = {S_kB:.2f} k_B"
+        )
+
+        return ANMLigandResult(
+            S_kB=S_kB,
+            S_kcal_per_K=S_kcal_per_K,
+            n_modes=len(evals),
+            n_protein_atoms=n_protein,
+            n_ligand_atoms=n_ligand,
+        )
+
+    def _infer_ligand_bonds(
+        self,
+        coords: np.ndarray,
+        bond_threshold: float = 2.0,
+    ) -> list[tuple[int, int]]:
+        """
+        Infer ligand bonds from distances.
+
+        Simple heuristic: atoms closer than bond_threshold are bonded.
+
+        Args:
+            coords: Nx3 array of ligand coordinates (Angstrom)
+            bond_threshold: Maximum bond distance (Angstrom)
+
+        Returns:
+            List of (atom_i, atom_j) tuples representing bonds
+        """
+        n_atoms = len(coords)
+        bonds = []
+
+        for i in range(n_atoms):
+            for j in range(i + 1, n_atoms):
+                dist = np.linalg.norm(coords[j] - coords[i])
+                if dist < bond_threshold:
+                    bonds.append((i, j))
+
+        return bonds

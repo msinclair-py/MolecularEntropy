@@ -20,6 +20,7 @@ __all__ = [
     "CHI_RESIDUES",
     "CHI_DEFINITIONS",
     "POLAR_ELEMENTS",
+    "SOLVENT_RESIDUES",
 ]
 
 # Boltzmann constant in kcal/mol/K
@@ -109,3 +110,16 @@ CHI_DEFINITIONS: dict[str, list[tuple[str, str, str, str]]] = {
 
 # Polar elements for SASA classification
 POLAR_ELEMENTS: set[str] = {"O", "N", "S"}
+
+# Common solvent and ion residue names to exclude from protein selection
+SOLVENT_RESIDUES: set[str] = {
+    # Water models
+    "WAT", "HOH", "TIP", "TIP3", "TIP4", "TIP5", "SPC", "SPCE", "OPC",
+    "T3P", "T4P", "T4E", "T5P", "TP3", "TP4", "TP5",
+    # Ions
+    "NA", "Na+", "NA+", "SOD", "K", "K+", "POT", "CL", "Cl-", "CL-", "CLA",
+    "MG", "MG2", "Mg2+", "CA", "CA2", "Ca2+", "ZN", "ZN2", "Zn2+",
+    "FE", "FE2", "FE3", "CU", "CU1", "CU2", "MN", "CO",
+    # Common buffer molecules
+    "PO4", "SO4", "ACE", "NME", "NH2",
+}
