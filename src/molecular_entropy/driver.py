@@ -431,30 +431,54 @@ class BindingEntropyCalculator:
     def calculate(
         self,
         pdb_path: str | Path,
-        chain_a: str,
-        chain_b: str,
+        chain_a: str = "A",
+        chain_b: str = "B",
         frame: int = 0,
         parallel: bool = False,  # Sequential is faster due to ANM's internal parallelism
+        topology_path: str | Path | None = None,
+        chain_a_residues: list[int] | None = None,
+        chain_b_residues: list[int] | None = None,
     ) -> BindingEntropyResult:
         """
         Calculate complete binding entropy.
 
         Args:
             pdb_path: Path to PDB file of the complex
-            chain_a: First chain ID
-            chain_b: Second chain ID
+            chain_a: First chain ID (default "A")
+            chain_b: Second chain ID (default "B")
             frame: Frame to use (for trajectories)
             parallel: Run entropy calculations in parallel (default True)
+            topology_path: Optional topology file (e.g. AMBER prmtop) for
+                          systems without chain IDs in the PDB.
+            chain_a_residues: Optional list of 0-based residue indices to
+                             assign to chain A. Use this for AMBER systems
+                             that lack chain IDs. If None, chain_a is used
+                             as a chain ID string for selection.
+            chain_b_residues: Optional list of 0-based residue indices to
+                             assign to chain B (e.g. ligand residues). Required
+                             when chain_a_residues is provided.
 
         Returns:
             BindingEntropyResult with all entropy contributions
         """
         pdb_path = Path(pdb_path)
         logger.info(f"Calculating binding entropy for {pdb_path}")
-        logger.info(f"Chains: {chain_a} + {chain_b}, T = {self.temperature} K")
 
         # Load structure once (shared by all calculations)
-        traj = StructureLoader.load(pdb_path)
+        traj = StructureLoader.load(pdb_path, topology=topology_path)
+
+        # If residue-based chain assignment is requested, rebuild topology
+        if chain_a_residues is not None or chain_b_residues is not None:
+            if chain_a_residues is None or chain_b_residues is None:
+                raise ValueError(
+                    "Both chain_a_residues and chain_b_residues must be "
+                    "provided together"
+                )
+            traj = StructureLoader.assign_chains(traj, chain_a_residues, chain_b_residues)
+            chain_a = "A"
+            chain_b = "B"
+
+        logger.info(f"Chains: {chain_a} + {chain_b}, T = {self.temperature} K")
 
         if parallel:
             # Run all entropy calculations in parallel
@@ -879,25 +903,44 @@ class BindingEntropyCalculator:
         self,
         traj_path: str | Path,
         topology_path: str | Path,
-        chain_a: str,
-        chain_b: str,
+        chain_a: str = "A",
+        chain_b: str = "B",
         frames: list[int] | None = None,
+        chain_a_residues: list[int] | None = None,
+        chain_b_residues: list[int] | None = None,
     ) -> list[BindingEntropyResult]:
         """
         Calculate binding entropy for multiple frames of a trajectory.
 
         Args:
             traj_path: Path to trajectory file (DCD, XTC, etc.)
-            topology_path: Path to topology file (PDB)
-            chain_a: First chain ID
-            chain_b: Second chain ID
+            topology_path: Path to topology file (PDB or prmtop)
+            chain_a: First chain ID (default "A")
+            chain_b: Second chain ID (default "B")
             frames: List of frame indices to analyze (default: all frames)
+            chain_a_residues: Optional list of 0-based residue indices to
+                             assign to chain A. Use for AMBER systems without
+                             chain IDs.
+            chain_b_residues: Optional list of 0-based residue indices to
+                             assign to chain B. Required when chain_a_residues
+                             is provided.
 
         Returns:
             List of BindingEntropyResult for each frame
         """
         logger.info(f"Loading trajectory from {traj_path}")
         traj = StructureLoader.load(traj_path, topology=topology_path)
+
+        # If residue-based chain assignment is requested, rebuild topology
+        if chain_a_residues is not None or chain_b_residues is not None:
+            if chain_a_residues is None or chain_b_residues is None:
+                raise ValueError(
+                    "Both chain_a_residues and chain_b_residues must be "
+                    "provided together"
+                )
+            traj = StructureLoader.assign_chains(traj, chain_a_residues, chain_b_residues)
+            chain_a = "A"
+            chain_b = "B"
 
         if frames is None:
             frames = list(range(traj.n_frames))

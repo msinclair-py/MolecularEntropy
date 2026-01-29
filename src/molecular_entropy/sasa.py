@@ -293,8 +293,12 @@ class SASACalculator:
         traj_b = StructureLoader.select_chain(traj, chain_b)
 
         sasa_complex = self.per_residue_sasa(traj, frame)
-        sasa_a = self.per_residue_sasa(traj_a, frame)
-        sasa_b = self.per_residue_sasa(traj_b, frame)
+        sasa_a = self.per_residue_sasa(traj_a, frame).with_columns(
+            pl.lit(chain_a).alias("chain_id")
+        )
+        sasa_b = self.per_residue_sasa(traj_b, frame).with_columns(
+            pl.lit(chain_b).alias("chain_id")
+        )
 
         # Combine unbound
         sasa_unbound = pl.concat([sasa_a, sasa_b])

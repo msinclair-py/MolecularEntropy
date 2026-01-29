@@ -200,6 +200,79 @@ class StructureLoader:
         return traj.atom_slice(sorted(atom_idx))
 
     @staticmethod
+    def assign_chains(
+        traj: md.Trajectory,
+        chain_a_residues: list[int],
+        chain_b_residues: list[int],
+    ) -> md.Trajectory:
+        """
+        Reassign chain IDs based on residue index groupings.
+
+        Useful for AMBER prmtop topologies that lack chain ID information.
+        Rebuilds the topology so that residues in ``chain_a_residues`` belong
+        to chain "A" and residues in ``chain_b_residues`` belong to chain "B".
+        Solvent / ion residues not in either list are placed on a third chain.
+
+        Args:
+            traj: MDTraj trajectory
+            chain_a_residues: Residue indices (0-based) for chain A
+            chain_b_residues: Residue indices (0-based) for chain B
+
+        Returns:
+            New trajectory with reassigned chain IDs
+        """
+        set_a = set(chain_a_residues)
+        set_b = set(chain_b_residues)
+
+        overlap = set_a & set_b
+        if overlap:
+            raise ValueError(
+                f"Residue indices appear in both chain_a and chain_b: {sorted(overlap)}"
+            )
+
+        old_top = traj.topology
+        new_top = md.Topology()
+
+        chain_obj_a = new_top.add_chain()  # chain "A" (index 0)
+        chain_obj_b = new_top.add_chain()  # chain "B" (index 1)
+        chain_obj_other = new_top.add_chain()  # everything else
+
+        atom_mapping: list[int] = []  # old atom index -> position in new
+
+        for res in old_top.residues:
+            if res.index in set_a:
+                target_chain = chain_obj_a
+            elif res.index in set_b:
+                target_chain = chain_obj_b
+            else:
+                target_chain = chain_obj_other
+
+            new_res = new_top.add_residue(res.name, target_chain, res.resSeq)
+            for atom in res.atoms:
+                new_top.add_atom(atom.name, atom.element, new_res)
+                atom_mapping.append(atom.index)
+
+        # Rebuild bonds
+        old_atom_to_new = {old: new for new, old in enumerate(atom_mapping)}
+        for bond in old_top.bonds:
+            i, j = bond[0].index, bond[1].index
+            if i in old_atom_to_new and j in old_atom_to_new:
+                new_top.add_bond(
+                    new_top.atom(old_atom_to_new[i]),
+                    new_top.atom(old_atom_to_new[j]),
+                )
+
+        # Reorder coordinates to match new atom order
+        new_xyz = traj.xyz[:, atom_mapping, :]
+        new_traj = md.Trajectory(new_xyz, new_top, time=traj.time, unitcell_lengths=traj.unitcell_lengths, unitcell_angles=traj.unitcell_angles)
+
+        logger.info(
+            f"Assigned chains: A={len(chain_a_residues)} residues, "
+            f"B={len(chain_b_residues)} residues"
+        )
+        return new_traj
+
+    @staticmethod
     def select_residues_except(traj: md.Trajectory, exclude_indices: list[int]) -> md.Trajectory:
         """
         Select all residues except those specified.
