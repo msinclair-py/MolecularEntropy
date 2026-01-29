@@ -531,6 +531,7 @@ class BindingEntropyCalculator:
         ligand_residues: list[int],
         protein_residues: list[int] | None = None,
         ligand_bonds: list[tuple[int, int]] | None = None,
+        topology_path: str | Path | None = None,
         frame: int = 0,
     ) -> LigandBindingEntropyResult:
         """
@@ -549,7 +550,13 @@ class BindingEntropyCalculator:
                              and common solvent/ion residues (WAT, HOH, NA, CL, etc.)
             ligand_bonds: Optional list of (atom_idx, atom_idx) tuples defining
                          ligand internal connectivity for ANM. Indices are relative
-                         to the ligand atoms. If None, bonds will be inferred from distances.
+                         to the ligand atoms. If None and topology_path is provided,
+                         bonds will be extracted from the topology. Otherwise,
+                         bonds will be inferred from distances.
+            topology_path: Optional path to a topology file (e.g. AMBER prmtop)
+                          that provides bond connectivity. Useful for static PDB
+                          structures where ligand bonds cannot be reliably inferred
+                          from distances alone.
             frame: Frame index to use
 
         Returns:
@@ -560,7 +567,7 @@ class BindingEntropyCalculator:
         logger.info(f"Ligand residues: {ligand_residues}")
 
         # Load full complex
-        traj_complex = StructureLoader.load(pdb_path)
+        traj_complex = StructureLoader.load(pdb_path, topology=topology_path)
 
         ligand_residues = list(ligand_residues)
         ligand_set = set(ligand_residues)
@@ -594,6 +601,12 @@ class BindingEntropyCalculator:
         if self.sasa_calc:
             logger.info("Computing complex SASA...")
             complex_sasa = self.sasa_calc.calculate(traj_protein_ligand, frame)
+
+        # Extract ligand bonds from topology if not explicitly provided
+        if ligand_bonds is None and topology_path is not None:
+            ligand_bonds = self._extract_ligand_bonds_from_topology(
+                traj_complex, ligand_residues
+            )
 
         # Complex ANM with ligand
         complex_anm = None
@@ -643,6 +656,57 @@ class BindingEntropyCalculator:
         logger.info(f"Total -T*dS = {result.total_negT_dS:.3f} kcal/mol")
 
         return result
+
+    @staticmethod
+    def _extract_ligand_bonds_from_topology(
+        traj: "md.Trajectory",
+        ligand_residues: list[int],
+    ) -> list[tuple[int, int]] | None:
+        """
+        Extract ligand bond connectivity from a loaded topology.
+
+        Finds all bonds where both atoms belong to ligand residues, then
+        re-indexes them relative to the ligand atom list (0-based).
+
+        Args:
+            traj: Loaded trajectory with topology containing bond information.
+            ligand_residues: Original residue indices of the ligand.
+
+        Returns:
+            List of (atom_i, atom_j) tuples with ligand-relative indices,
+            or None if no bonds are found.
+        """
+        ligand_set = set(ligand_residues)
+
+        # Collect atom indices belonging to ligand residues
+        ligand_atoms = [
+            atom.index
+            for atom in traj.topology.atoms
+            if atom.residue.index in ligand_set
+        ]
+        if not ligand_atoms:
+            return None
+
+        ligand_atom_set = set(ligand_atoms)
+        # Map global atom index -> ligand-relative index
+        global_to_local = {g: l for l, g in enumerate(sorted(ligand_atoms))}
+
+        bonds = [
+            (global_to_local[b[0].index], global_to_local[b[1].index])
+            for b in traj.topology.bonds
+            if b[0].index in ligand_atom_set and b[1].index in ligand_atom_set
+        ]
+
+        if bonds:
+            logger.info(
+                f"Extracted {len(bonds)} ligand bonds from topology"
+            )
+            return bonds
+
+        logger.warning(
+            "No ligand bonds found in topology; falling back to distance inference"
+        )
+        return None
 
     def calculate_ligand_binding_trajectory(
         self,

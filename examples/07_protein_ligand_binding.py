@@ -26,6 +26,7 @@ print("=" * 50)
 
 result = calc.calculate_ligand_binding(
     pdb_path="data/protein_ligand.pdb",
+    topology_path="data/topology.prmtop"
     ligand_residues=LIGAND_RESIDUES,
 )
 
